@@ -15,6 +15,15 @@ use crate::{ContentType, Method, StatusCode, enc};
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 100;
 
+/// Ensures the decrement happens even if the handler panics.
+struct ActiveGuard(Arc<AtomicUsize>);
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 pub struct Request {
     pub method: Method,
     pub path: String,
@@ -52,8 +61,8 @@ where
                 let handler = handler.clone();
                 let active = active.clone();
                 thread::spawn(move || {
+                    let _guard = ActiveGuard(active);
                     handle_stream(stream, handler);
-                    active.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             Err(e) => {
