@@ -108,12 +108,24 @@ where
         .unwrap(); // safe
 
     let mut buf = [0; 8 * 1024];
-    let size = match stream.read(&mut buf) {
-        Ok(x) => x,
-        Err(_) => return send_error(stream, StatusCode::BadRequest),
-    };
+    let mut total = 0;
+    loop {
+        match stream.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n;
+                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+                if total == buf.len() {
+                    break;
+                }
+            }
+            Err(_) => return send_error(stream, StatusCode::BadRequest),
+        }
+    }
 
-    let req = match parse_request(&buf[..size]) {
+    let req = match parse_request(&buf[..total]) {
         Ok(x) => x,
         Err(err) => return send_error(stream, err),
     };
