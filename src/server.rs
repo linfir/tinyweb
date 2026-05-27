@@ -278,7 +278,8 @@ fn send_response(
 }
 
 fn send_error(stream: TcpStream, status_code: StatusCode) {
-    let _ = send_response(stream, status_code, &HashMap::new(), b"");
+    let headers = HashMap::from([("Connection".to_string(), "close".to_string())]);
+    let _ = send_response(stream, status_code, &headers, b"");
 }
 
 fn next_line<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
