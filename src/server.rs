@@ -13,6 +13,7 @@ use std::{
 use crate::{ContentType, Method, StatusCode, enc};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 100;
 
 /// Ensures the decrement happens even if the handler panics.
@@ -155,6 +156,8 @@ where
         Ok(x) => x,
         Err(err) => return send_error(stream, err),
     };
+
+    stream.set_write_timeout(Some(WRITE_TIMEOUT)).unwrap(); // safe
 
     let ResponseImpl::Regular {
         status_code,
