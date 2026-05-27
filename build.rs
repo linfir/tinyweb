@@ -180,6 +180,8 @@ fn generate_status_code(codes: &[StatusCode], dst: &mut String) {
 // ----------------------------------------------------------------------------
 
 fn main() -> io::Result<()> {
+    println!("cargo:rerun-if-changed=build.rs");
+
     let input = Path::new("mime.txt");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
     let output_path = Path::new(&out_dir).join("generated.rs");
