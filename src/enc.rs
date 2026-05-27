@@ -1,35 +1,3 @@
-#![allow(dead_code)]
-
-pub fn latin1_to_utf8(input: &[u8]) -> String {
-    input.iter().map(|&b| b as char).collect()
-}
-
-#[test]
-fn test_latin1_to_utf8() {
-    assert_eq!(latin1_to_utf8(b"hello"), "hello");
-    assert_eq!(latin1_to_utf8(&[0xe9]), "\u{e9}");
-}
-
-pub fn utf8_to_latin1(input: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(input.len());
-    for c in input.chars() {
-        let code = c as u32;
-        if code <= 0xFF {
-            out.push(code as u8);
-        } else {
-            return None;
-        }
-    }
-    Some(out)
-}
-
-#[test]
-fn test_utf8_to_latin1() {
-    assert_eq!(utf8_to_latin1("hello"), Some(b"hello".to_vec()));
-    assert_eq!(utf8_to_latin1("é"), Some(vec![0xe9]));
-    assert_eq!(utf8_to_latin1("€"), None);
-}
-
 pub fn percent_decode(input: &[u8]) -> Option<String> {
     let mut out = Vec::with_capacity(input.len());
     let mut chars = input.iter().copied();
@@ -37,6 +5,10 @@ pub fn percent_decode(input: &[u8]) -> Option<String> {
         if b == b'%' {
             let hi = chars.next()?;
             let lo = chars.next()?;
+            // Reject encoded slashes (%2F)
+            if hi == b'2' && (lo == b'F' || lo == b'f') {
+                return None;
+            }
             let hex = [hi, lo];
             let hex_str = std::str::from_utf8(&hex).ok()?;
             let val = u8::from_str_radix(hex_str, 16).ok()?;
@@ -56,7 +28,9 @@ fn test_percent_decode() {
     );
     assert_eq!(percent_decode(b"foo%2"), None);
     assert_eq!(percent_decode(b"foo%XXbar"), None);
-    assert_eq!(percent_decode(b"%C3%A9"), Some("é".to_string()));
+    assert_eq!(percent_decode(b"%C3%A9"), Some("é".into()));
+    assert_eq!(percent_decode(b"foo%2Fbar"), None); // encoded slash rejected
+    assert_eq!(percent_decode(b"foo%2fbar"), None);
 }
 
 pub fn percent_encode(input: &str) -> String {

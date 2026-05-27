@@ -207,6 +207,9 @@ impl RequestLine {
         }
 
         let path = enc::percent_decode(path)?;
+        if path.contains('\0') || path.contains('\\') || path.split('/').any(|seg| seg == "..") {
+            return None;
+        }
 
         let mut query_map = HashMap::new();
         if !query.is_empty() {
@@ -341,4 +344,35 @@ fn test_parse_empty_query_key() {
     let line = b"GET /?=value HTTP/1.1";
     let req_line = RequestLine::parse(line).unwrap();
     assert!(req_line.query_map.is_empty());
+}
+
+#[test]
+fn test_parse_rejects_encoded_slash() {
+    assert!(RequestLine::parse(b"GET /foo%2Fbar HTTP/1.1").is_none());
+    assert!(RequestLine::parse(b"GET /foo%2fbar HTTP/1.1").is_none());
+}
+
+#[test]
+fn test_parse_rejects_encoded_backslash() {
+    assert!(RequestLine::parse(b"GET /foo%5Cbar HTTP/1.1").is_none());
+    assert!(RequestLine::parse(b"GET /foo%5cbar HTTP/1.1").is_none());
+}
+
+#[test]
+fn test_parse_rejects_encoded_null() {
+    assert!(RequestLine::parse(b"GET /foo%00bar HTTP/1.1").is_none());
+}
+
+#[test]
+fn test_parse_rejects_dot_dot_segments() {
+    assert!(RequestLine::parse(b"GET /foo/../bar HTTP/1.1").is_none());
+    assert!(RequestLine::parse(b"GET /foo/.. HTTP/1.1").is_none());
+    assert!(RequestLine::parse(b"GET /../etc/passwd HTTP/1.1").is_none());
+    assert!(RequestLine::parse(b"GET /foo/%2e%2e/bar HTTP/1.1").is_none());
+}
+
+#[test]
+fn test_parse_allows_triple_dot() {
+    let req_line = RequestLine::parse(b"GET /foo/.../bar HTTP/1.1").unwrap();
+    assert_eq!(req_line.path, "/foo/.../bar");
 }
