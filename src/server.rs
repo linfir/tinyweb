@@ -149,15 +149,17 @@ fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
     let req_line = RequestLine::parse(first).ok_or(StatusCode::BadRequest)?;
 
     let mut headers = HashMap::new();
+    let mut found_end = false;
     while let Some(line) = next_line(&mut buf) {
         if line.is_empty() {
+            found_end = true;
             break;
         }
         let header = Header::parse(line).ok_or(StatusCode::BadRequest)?;
         headers.insert(header.key, header.value);
     }
 
-    if !headers.contains_key("host") {
+    if !found_end || !headers.contains_key("host") {
         return Err(StatusCode::BadRequest);
     }
 
