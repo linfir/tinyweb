@@ -89,19 +89,18 @@ impl Response {
         })
     }
 
-    pub fn redirect(to: &str) -> Self {
-        assert!(
-            !to.contains(['\r', '\n']),
-            "redirect target must not contain CR or LF"
-        );
-        Response(ResponseImpl::Regular {
+    pub fn redirect(to: &str) -> Result<Self, &'static str> {
+        if to.contains(['\r', '\n']) {
+            return Err("redirect target must not contain CR or LF");
+        }
+        Ok(Response(ResponseImpl::Regular {
             status_code: StatusCode::TemporaryRedirect,
             headers: vec![
                 ("Location".into(), to.into()),
                 ("Connection".into(), "close".into()),
             ],
             body: Vec::new(),
-        })
+        }))
     }
 }
 
