@@ -226,7 +226,16 @@ impl RequestLine {
             return None;
         }
 
+        // Reject encoded slashes (only in the path)
+        if path
+            .windows(3)
+            .any(|w| w[0] == b'%' && w[1] == b'2' && (w[2] == b'F' || w[2] == b'f'))
+        {
+            return None;
+        }
+
         let path = enc::percent_decode(path)?;
+
         if path.contains('\0') || path.contains('\\') || path.split('/').any(|seg| seg == "..") {
             return None;
         }

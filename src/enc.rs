@@ -5,10 +5,6 @@ pub fn percent_decode(input: &[u8]) -> Option<String> {
         if b == b'%' {
             let hi = chars.next()?;
             let lo = chars.next()?;
-            // Reject encoded slashes (%2F)
-            if hi == b'2' && (lo == b'F' || lo == b'f') {
-                return None;
-            }
             let hex = [hi, lo];
             let hex_str = std::str::from_utf8(&hex).ok()?;
             let val = u8::from_str_radix(hex_str, 16).ok()?;
@@ -29,8 +25,8 @@ fn test_percent_decode() {
     assert_eq!(percent_decode(b"foo%2"), None);
     assert_eq!(percent_decode(b"foo%XXbar"), None);
     assert_eq!(percent_decode(b"%C3%A9"), Some("é".into()));
-    assert_eq!(percent_decode(b"foo%2Fbar"), None); // encoded slash rejected
-    assert_eq!(percent_decode(b"foo%2fbar"), None);
+    assert_eq!(percent_decode(b"foo%2Fbar"), Some("foo/bar".into())); // slash decoded normally
+    assert_eq!(percent_decode(b"foo%2fbar"), Some("foo/bar".into()));
 }
 
 #[allow(unused)]
