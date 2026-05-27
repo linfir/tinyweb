@@ -13,6 +13,7 @@ pub struct Request {
     pub method: Method,
     pub path: String,
     pub query: HashMap<String, String>,
+    /// Header keys are lowercase
     pub headers: HashMap<String, String>,
 }
 
@@ -156,7 +157,7 @@ fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
         headers.insert(header.key, header.value);
     }
 
-    if !headers.contains_key("Host") {
+    if !headers.contains_key("host") {
         return Err(StatusCode::BadRequest);
     }
 
@@ -228,7 +229,7 @@ impl Header {
         let line = std::str::from_utf8(line).ok()?;
         let (key, value) = line.split_once(':')?;
         Some(Header {
-            key: key.trim().to_string(),
+            key: key.trim().to_ascii_lowercase(),
             value: value.trim().to_string(),
         })
     }
