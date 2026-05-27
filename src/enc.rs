@@ -33,6 +33,7 @@ fn test_percent_decode() {
     assert_eq!(percent_decode(b"foo%2fbar"), None);
 }
 
+#[allow(unused)]
 pub fn percent_encode(input: &str) -> String {
     let mut out = Vec::with_capacity(input.len() + 16);
     for b in input.as_bytes() {
