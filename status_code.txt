@@ -5,3 +5,4 @@
 404  NotFound            Not Found
 405  MethodNotAllowed    Method Not Allowed
 408  RequestTimeout      Request Timeout
+503  ServiceUnavailable  Service Unavailable

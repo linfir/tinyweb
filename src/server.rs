@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     io::{self, prelude::*},
     net::{TcpListener, TcpStream, ToSocketAddrs},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -10,6 +13,7 @@ use std::{
 use crate::{ContentType, Method, StatusCode, enc};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONNECTIONS: usize = 100;
 
 pub struct Request {
     pub method: Method,
@@ -36,12 +40,20 @@ where
 {
     let listener = TcpListener::bind(addr).expect("Cannot start server");
     let handler = Arc::new(handler);
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                if active.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                    active.fetch_sub(1, Ordering::Relaxed);
+                    send_error(stream, StatusCode::ServiceUnavailable);
+                    continue;
+                }
                 let handler = handler.clone();
+                let active = active.clone();
                 thread::spawn(move || {
                     handle_stream(stream, handler);
+                    active.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             Err(e) => {
