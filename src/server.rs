@@ -161,7 +161,7 @@ where
         headers,
         body,
     } = handler(&req).0;
-    if let Err(e) = send_response(stream, status_code, &headers.into_iter().collect(), &body) {
+    if let Err(e) = send_response(stream, status_code, &headers, &body) {
         log::error!("Failed to send response: {}", e);
     }
 }
@@ -282,7 +282,7 @@ impl Header {
 fn send_response(
     stream: TcpStream,
     status_code: StatusCode,
-    headers: &HashMap<String, String>,
+    headers: &[(String, String)],
     body: &[u8],
 ) -> std::io::Result<()> {
     let mut w = io::BufWriter::new(stream);
@@ -309,7 +309,7 @@ fn send_response(
 }
 
 fn send_error(stream: TcpStream, status_code: StatusCode) {
-    let _ = send_response(stream, status_code, &HashMap::new(), b"");
+    let _ = send_response(stream, status_code, &[], b"");
 }
 
 fn next_line<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
