@@ -78,7 +78,7 @@ impl Response {
     pub fn file(ext: Option<&str>, body: impl Into<Vec<u8>>) -> Self {
         let mime = ContentType::from_extension(ext);
         if mime == ContentType::Default {
-            eprintln!("Unknown file extension: {:?}", ext);
+            log::warn!("Unknown file extension: {:?}", ext);
         }
         Response(ResponseImpl::Regular {
             status_code: StatusCode::Ok,
