@@ -25,6 +25,12 @@ impl SseWriter {
 
     /// Sends a named event.
     pub fn send_event(&mut self, event: &str, data: &str) -> io::Result<()> {
+        if event.contains(['\n', '\r']) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SSE event name must not contain CR or LF",
+            ));
+        }
         writeln!(self.inner, "event:{}", event)?;
         for line in data.split('\n') {
             writeln!(self.inner, "data:{}", line)?;
