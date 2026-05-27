@@ -4,10 +4,12 @@ use std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::Arc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{ContentType, Method, StatusCode, enc};
+
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Request {
     pub method: Method,
@@ -107,13 +109,16 @@ fn handle_stream<F>(mut stream: TcpStream, handler: Arc<F>)
 where
     F: Fn(&Request) -> Response + Send + Sync + 'static,
 {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap(); // safe
+    let deadline = Instant::now() + READ_TIMEOUT;
 
     let mut buf = [0; 8 * 1024];
     let mut total = 0;
     loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return send_error(stream, StatusCode::BadRequest);
+        }
+        stream.set_read_timeout(Some(remaining)).unwrap(); // safe
         match stream.read(&mut buf[total..]) {
             Ok(0) => break,
             Ok(n) => {
