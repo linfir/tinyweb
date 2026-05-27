@@ -111,6 +111,7 @@ impl Response {
         })
     }
 
+    /// fails if the target contains CR or LF
     pub fn redirect(to: &str) -> Result<Self, &'static str> {
         if to.contains(['\r', '\n']) {
             return Err("redirect target must not contain CR or LF");
