@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{ContentType, Method, StatusCode, enc};
+use crate::{ContentType, Method, StatusCode, enc, sse::SseWriter};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -40,6 +40,9 @@ enum ResponseImpl {
         status_code: StatusCode,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
+    },
+    Sse {
+        handler: Box<dyn FnOnce(&mut SseWriter) + Send + 'static>,
     },
 }
 
@@ -122,6 +125,15 @@ impl Response {
             body: Vec::new(),
         }))
     }
+
+    pub fn sse<F>(handler: F) -> Self
+    where
+        F: FnOnce(&mut SseWriter) + Send + 'static,
+    {
+        Response(ResponseImpl::Sse {
+            handler: Box::new(handler),
+        })
+    }
 }
 
 fn handle_stream<F>(mut stream: TcpStream, handler: Arc<F>)
@@ -158,15 +170,25 @@ where
         Err(err) => return send_error(stream, err),
     };
 
-    stream.set_write_timeout(Some(WRITE_TIMEOUT)).unwrap(); // safe
-
-    let ResponseImpl::Regular {
-        status_code,
-        headers,
-        body,
-    } = handler(&req).0;
-    if let Err(e) = send_response(stream, status_code, &headers, &body) {
-        log::error!("Failed to send response: {}", e);
+    match handler(&req).0 {
+        ResponseImpl::Regular {
+            status_code,
+            headers,
+            body,
+        } => {
+            stream.set_write_timeout(Some(WRITE_TIMEOUT)).unwrap(); // safe
+            if let Err(e) = send_response(stream, status_code, &headers, &body) {
+                log::error!("Failed to send response: {}", e);
+            }
+        }
+        ResponseImpl::Sse { handler } => {
+            if let Err(e) = send_sse_headers(&mut stream) {
+                log::error!("Failed to send SSE headers: {}", e);
+                return;
+            }
+            let mut writer = SseWriter::new(stream);
+            handler(&mut writer);
+        }
     }
 }
 
@@ -281,6 +303,16 @@ impl Header {
             value: value.trim().to_string(),
         })
     }
+}
+
+fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\n\
+          Content-Type: text/event-stream\r\n\
+          Cache-Control: no-cache\r\n\
+          Connection: close\r\n\
+          \r\n",
+    )
 }
 
 fn send_response(
