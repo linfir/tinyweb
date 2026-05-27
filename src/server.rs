@@ -253,7 +253,7 @@ impl RequestLine {
 
         Some(RequestLine {
             method,
-            path: path.to_owned(),
+            path,
             query_map,
         })
     }
