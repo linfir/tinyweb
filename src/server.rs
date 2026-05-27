@@ -271,8 +271,12 @@ impl Header {
     pub fn parse(line: &[u8]) -> Option<Self> {
         let line = std::str::from_utf8(line).ok()?;
         let (key, value) = line.split_once(':')?;
+        let key = key.trim();
+        if key.is_empty() {
+            return None;
+        }
         Some(Header {
-            key: key.trim().to_ascii_lowercase(),
+            key: key.to_ascii_lowercase(),
             value: value.trim().to_string(),
         })
     }
