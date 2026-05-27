@@ -1,0 +1,10 @@
+txt    text/plain              Plain
+html   text/html               Html
+css    text/css                Css
+js     application/javascript  Js
+svg    image/svg+xml           Svg
+tex    application/x-latex     Latex
+pdf    application/pdf         Pdf
+woff   font/woff               Woff
+woff2  font/woff2              Woff2
+png    image/png               Png

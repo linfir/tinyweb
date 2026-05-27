@@ -1,0 +1,6 @@
+[package]
+name = "miniweb"
+edition = "2024"
+
+[dependencies]
+log = "0.4.27"

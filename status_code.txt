@@ -1,0 +1,7 @@
+200  Ok                  OK
+307  TemporaryRedirect   Temporary Redirect
+400  BadRequest          Bad Request
+403  Forbidden           Forbidden
+404  NotFound            Not Found
+405  MethodNotAllowed    Method Not Allowed
+408  RequestTimeout      Request Timeout
