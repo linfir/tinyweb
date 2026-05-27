@@ -85,7 +85,7 @@ impl Response {
     pub fn error(status_code: StatusCode) -> Self {
         Response(ResponseImpl::Regular {
             status_code,
-            headers: vec![("Connection".into(), "close".into())],
+            headers: Vec::new(),
             body: Vec::new(),
         })
     }
@@ -116,10 +116,7 @@ impl Response {
         }
         Ok(Response(ResponseImpl::Regular {
             status_code: StatusCode::TemporaryRedirect,
-            headers: vec![
-                ("Location".into(), to.into()),
-                ("Connection".into(), "close".into()),
-            ],
+            headers: vec![("Location".into(), to.into())],
             body: Vec::new(),
         }))
     }
@@ -301,6 +298,7 @@ fn send_response(
         write!(w, "{}: {}\r\n", name, value)?;
     }
     write!(w, "Content-Length: {}\r\n", body.len())?;
+    write!(w, "Connection: close\r\n")?;
 
     write!(w, "\r\n")?;
 
@@ -311,8 +309,7 @@ fn send_response(
 }
 
 fn send_error(stream: TcpStream, status_code: StatusCode) {
-    let headers = HashMap::from([("Connection".to_string(), "close".to_string())]);
-    let _ = send_response(stream, status_code, &headers, b"");
+    let _ = send_response(stream, status_code, &HashMap::new(), b"");
 }
 
 fn next_line<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
