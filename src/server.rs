@@ -87,7 +87,10 @@ impl Response {
     }
 
     pub fn redirect(to: &str) -> Self {
-        // TODO: validate argument
+        assert!(
+            !to.contains(['\r', '\n']),
+            "redirect target must not contain CR or LF"
+        );
         Response(ResponseImpl::Regular {
             status_code: StatusCode::TemporaryRedirect,
             headers: vec![
