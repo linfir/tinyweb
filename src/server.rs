@@ -156,7 +156,11 @@ fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
             break;
         }
         let header = Header::parse(line).ok_or(StatusCode::BadRequest)?;
-        headers.insert(header.key, header.value);
+        let entry = headers.entry(header.key).or_insert_with(String::new);
+        if !entry.is_empty() {
+            entry.push_str(", ");
+        }
+        entry.push_str(&header.value);
     }
 
     if !found_end || !headers.contains_key("host") {
