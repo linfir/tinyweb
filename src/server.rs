@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{ContentType, Method, StatusCode, enc};
+use crate::{ContentType, Method, StatusCode, enc, ws::WebSocket};
 
 pub struct Request {
     pub method: Method,
@@ -23,6 +23,9 @@ enum ResponseImpl {
         status_code: StatusCode,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
+    },
+    Upgrade {
+        handler: Arc<dyn Fn(&mut WebSocket) + Send + Sync + 'static>,
     },
 }
 
@@ -47,6 +50,35 @@ where
         }
     }
     unreachable!();
+}
+
+impl Request {
+    pub fn upgradable(&self) -> bool {
+        self.method == Method::GET
+            && self
+                .headers
+                .get("Upgrade")
+                .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+            && self
+                .headers
+                .get("Connection")
+                .is_some_and(|v| v.eq_ignore_ascii_case("upgrade"))
+            && self
+                .headers
+                .get("Sec-WebSocket-Version")
+                .is_some_and(|v| v == "13")
+            && self.headers.contains_key("Sec-WebSocket-Key")
+    }
+
+    // fn upgrade(self) -> std::io::Result<WebSocket> {
+    //     let key = self.headers.get("Sec-WebSocket-Key").ok_or_else(|| {
+    //         io::Error::new(
+    //             io::ErrorKind::InvalidData,
+    //             "Missing Sec-WebSocket-Key header",
+    //         )
+    //     })?;
+    //     WebSocket::new(self.stream, key)
+    // }
 }
 
 impl Response {
@@ -97,6 +129,15 @@ impl Response {
             body: Vec::new(),
         })
     }
+
+    pub fn upgrade<F>(handler: F) -> Self
+    where
+        F: Fn(&mut WebSocket) + Send + Sync + 'static,
+    {
+        Response(ResponseImpl::Upgrade {
+            handler: Arc::new(handler),
+        })
+    }
 }
 
 fn handle_stream<F>(mut stream: TcpStream, handler: Arc<F>)
@@ -118,13 +159,29 @@ where
         Err(err) => return send_error(stream, err),
     };
 
-    let ResponseImpl::Regular {
-        status_code,
-        headers,
-        body,
-    } = handler(&req).0;
-    if let Err(e) = send_response(stream, status_code, &headers.into_iter().collect(), &body) {
-        log::error!("Failed to send response: {}", e);
+    let res = handler(&req).0;
+    match res {
+        ResponseImpl::Regular {
+            status_code,
+            headers,
+            body,
+        } => {
+            if let Err(e) =
+                send_response(stream, status_code, &headers.into_iter().collect(), &body)
+            {
+                log::error!("Failed to send response: {}", e);
+            }
+        }
+        ResponseImpl::Upgrade { handler } => {
+            if let Some(key) = req.headers.get("Sec-WebSocket-Key") {
+                match WebSocket::new(stream, key) {
+                    Ok(mut ws) => (handler)(&mut ws),
+                    Err(e) => log::error!("WebSocket upgrade failed: {}", e),
+                }
+            } else {
+                log::error!("Missing `Sec-WebSocket-Key` header for upgrade");
+            }
+        }
     }
 }
 
