@@ -12,9 +12,29 @@ use std::{
 
 use crate::{ContentType, Method, StatusCode, enc, sse::SseWriter};
 
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_CONNECTIONS: usize = 100;
+/// Configuration for [`serve`].
+pub struct Config {
+    /// Maximum number of concurrent connections.
+    /// Excess connections receive a 503 response.
+    /// Default: 100.
+    pub max_connections: usize,
+    /// Timeout for reading the request headers.
+    /// Default: 5 seconds.
+    pub read_timeout: Duration,
+    /// Timeout for writing the response.
+    /// Default: 5 seconds.
+    pub write_timeout: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            max_connections: 100,
+            read_timeout: Duration::from_secs(5),
+            write_timeout: Duration::from_secs(5),
+        }
+    }
+}
 
 /// Ensures the decrement happens even if the handler panics.
 struct ActiveGuard(Arc<AtomicUsize>);
@@ -61,9 +81,9 @@ enum ResponseImpl {
 /// Binds to `addr` and starts handling incoming connections.
 ///
 /// Each request is dispatched to `handler` on its own thread. The function
-/// never returns. Up to 100 concurrent connections are served; excess
-/// connections receive a 503 response. Read and write timeouts are 5 seconds.
-pub fn serve<A, F>(addr: A, handler: F) -> !
+/// never returns. Limits are controlled by `config`; use [`Config::default`]
+/// for sensible defaults.
+pub fn serve<A, F>(addr: A, config: Config, handler: F) -> !
 where
     A: ToSocketAddrs,
     F: Fn(&Request) -> Response + Send + Sync + 'static,
@@ -74,16 +94,18 @@ where
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if active.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                if active.fetch_add(1, Ordering::Relaxed) >= config.max_connections {
                     active.fetch_sub(1, Ordering::Relaxed);
                     send_error(stream, StatusCode::ServiceUnavailable);
                     continue;
                 }
                 let handler = handler.clone();
                 let active = active.clone();
+                let read_timeout = config.read_timeout;
+                let write_timeout = config.write_timeout;
                 thread::spawn(move || {
                     let _guard = ActiveGuard(active);
-                    handle_stream(stream, handler);
+                    handle_stream(stream, handler, read_timeout, write_timeout);
                 });
             }
             Err(e) => {
@@ -169,11 +191,15 @@ impl Response {
     }
 }
 
-fn handle_stream<F>(mut stream: TcpStream, handler: Arc<F>)
-where
+fn handle_stream<F>(
+    mut stream: TcpStream,
+    handler: Arc<F>,
+    read_timeout: Duration,
+    write_timeout: Duration,
+) where
     F: Fn(&Request) -> Response + Send + Sync + 'static,
 {
-    let deadline = Instant::now() + READ_TIMEOUT;
+    let deadline = Instant::now() + read_timeout;
 
     let mut buf = [0; 8 * 1024];
     let mut total = 0;
@@ -209,7 +235,7 @@ where
             headers,
             body,
         } => {
-            stream.set_write_timeout(Some(WRITE_TIMEOUT)).unwrap(); // safe
+            stream.set_write_timeout(Some(write_timeout)).unwrap(); // safe
             if let Err(e) = send_response(stream, status_code, &headers, &body) {
                 log::error!("Failed to send response: {}", e);
             }

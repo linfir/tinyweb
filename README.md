@@ -20,10 +20,10 @@ log = "0.4"
 ```
 
 ```rust,no_run
-use tinyweb::{ContentType, Method, Request, Response};
+use tinyweb::{Config, ContentType, Method, Request, Response};
 
 fn main() {
-    tinyweb::serve("127.0.0.1:8080", |req: &Request| {
+    tinyweb::serve("127.0.0.1:8080", Config::default(), |req: &Request| {
         match (req.method, req.path.as_str()) {
             (Method::GET, "/") => Response::ok(ContentType::Html, "<h1>Hello!</h1>"),
             _ => Response::not_found(),
@@ -36,10 +36,10 @@ fn main() {
 
 ```rust,no_run
 use std::{thread, time::Duration};
-use tinyweb::{Method, Request, Response};
+use tinyweb::{Config, Method, Request, Response};
 
 fn main() {
-    tinyweb::serve("127.0.0.1:8080", |req: &Request| {
+    tinyweb::serve("127.0.0.1:8080", Config::default(), |req: &Request| {
         match (req.method, req.path.as_str()) {
             (Method::GET, "/events") => Response::sse(|w| {
                 for i in 0..10u32 {
@@ -59,8 +59,8 @@ fn main() {
 
 - HTTP/1.1 only; request body is not read
 - 8 KB request buffer (headers only)
-- Maximum 100 concurrent connections; excess receives HTTP 503 error code
-- 5-second read and write timeouts
+- Maximum 100 concurrent connections by default; excess receives HTTP 503 (configurable via [`Config`])
+- 5-second read and write timeouts by default (configurable via [`Config`])
 
 ## License
 
