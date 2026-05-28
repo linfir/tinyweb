@@ -1,8 +1,8 @@
 # tinyweb
 
-A minimal, synchronous HTTP/1.1 server library
+A minimal, zero-dependency (except the `log` crate), synchronous HTTP/1.1 server library
 intended for local development servers,
-not production use.
+not for production use.
 
 ## Features
 
@@ -12,12 +12,6 @@ not production use.
 - Server-Sent Events (SSE) support
 
 ## Usage
-
-```toml
-[dependencies]
-tinyweb = "0.1"
-log = "0.4"
-```
 
 ```rust,no_run
 use tinyweb::{Config, ContentType, Method, Request, Response};
@@ -59,8 +53,11 @@ fn main() {
 
 - HTTP/1.1 only; request body is not read
 - 8 KB request buffer (headers only)
-- Maximum 100 concurrent connections by default; excess receives HTTP 503 (configurable via [`Config`])
-- 5-second read and write timeouts by default (configurable via [`Config`])
+- Maximum 100 concurrent connections by default;
+  excess receives HTTP 503
+  (configurable via [`Config`])
+- 5-second read and write timeouts by default
+  (configurable via [`Config`])
 
 ## License
 
