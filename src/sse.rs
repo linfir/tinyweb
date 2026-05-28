@@ -16,8 +16,8 @@ impl SseWriter {
 
     /// Sends an unnamed event.
     pub fn send(&mut self, data: &str) -> io::Result<()> {
-        for line in data.split('\n') {
-            writeln!(self.inner, "data:{}", line.trim_end_matches('\r'))?;
+        for line in data.lines() {
+            writeln!(self.inner, "data:{}", line)?;
         }
         writeln!(self.inner)?;
         self.inner.flush()
@@ -32,8 +32,8 @@ impl SseWriter {
             ));
         }
         writeln!(self.inner, "event:{}", event)?;
-        for line in data.split('\n') {
-            writeln!(self.inner, "data:{}", line.trim_end_matches('\r'))?;
+        for line in data.lines() {
+            writeln!(self.inner, "data:{}", line)?;
         }
         writeln!(self.inner)?;
         self.inner.flush()
