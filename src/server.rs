@@ -17,6 +17,7 @@ use crate::{
     sse::{SseResponse, SseWriter, send_sse_headers},
     threadpool::ThreadPool,
     types::{Method, StatusCode},
+    ws::{WebSocket, WsResponse, send_upgrade_headers},
 };
 
 /// Configuration for [`serve`].
@@ -177,6 +178,7 @@ impl Drop for ConnGuard {
 enum AnyResponseImpl {
     Regular(Response),
     Sse(SseResponse),
+    Ws(WsResponse),
 }
 
 /// The return type of a request handler.
@@ -191,6 +193,12 @@ impl From<Response> for AnyResponse {
 impl From<SseResponse> for AnyResponse {
     fn from(r: SseResponse) -> Self {
         AnyResponse(AnyResponseImpl::Sse(r))
+    }
+}
+
+impl From<WsResponse> for AnyResponse {
+    fn from(r: WsResponse) -> Self {
+        AnyResponse(AnyResponseImpl::Ws(r))
     }
 }
 
@@ -536,6 +544,62 @@ fn handle_stream<F, R>(
                 if config.access_log {
                     log::info!(
                         "{} {} {} SSE closed {}ms #{}",
+                        peer_addr,
+                        req.method.as_str(),
+                        safe_path,
+                        start.elapsed().as_millis(),
+                        req.id,
+                    );
+                }
+                return;
+            }
+            AnyResponseImpl::Ws(WsResponse(ws_handler)) => {
+                let key = req
+                    .upgradable()
+                    .then(|| req.headers.get("sec-websocket-key"))
+                    .flatten();
+                let Some(key) = key else {
+                    let status = StatusCode::BadRequest;
+                    if config.access_log {
+                        let (referer, ua) = clf_headers(&req);
+                        let req_line = clf_request_line(req.method.as_str(), &safe_path);
+                        log_clf(
+                            peer_addr,
+                            &recv_date,
+                            &req_line,
+                            status.as_u16(),
+                            0,
+                            &referer,
+                            &ua,
+                            Some(start.elapsed().as_millis()),
+                            req.id,
+                        );
+                    }
+                    send_error(&stream, status);
+                    return;
+                };
+                if let Err(e) = send_upgrade_headers(&stream, key, &recv_date) {
+                    log::error!("Failed to send upgrade headers: {}", e);
+                    return;
+                }
+                if config.access_log {
+                    let (referer, ua) = clf_headers(&req);
+                    let req_line = clf_request_line(req.method.as_str(), &safe_path);
+                    log_clf(
+                        peer_addr, &recv_date, &req_line, 101, "-", &referer, &ua, None, req.id,
+                    );
+                }
+                let Ok(mut ws) = WebSocket::new(stream) else {
+                    return;
+                };
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ws_handler(&mut ws)))
+                    .is_err()
+                {
+                    log::error!("handler panicked");
+                }
+                if config.access_log {
+                    log::info!(
+                        "{} {} {} WS closed {}ms #{}",
                         peer_addr,
                         req.method.as_str(),
                         safe_path,
