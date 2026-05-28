@@ -10,4 +10,4 @@ repository = "https://github.com/linfir/tinyweb"
 readme = "README.md"
 
 [dependencies]
-log = "0.4.27"
+log = "0.4.4"
