@@ -229,13 +229,14 @@ fn handle_stream<F>(
         Err(err) => return send_error(stream, err),
     };
 
+    stream.set_write_timeout(Some(write_timeout)).unwrap(); // safe
+
     match handler(&req).0 {
         ResponseImpl::Regular {
             status_code,
             headers,
             body,
         } => {
-            stream.set_write_timeout(Some(write_timeout)).unwrap(); // safe
             if let Err(e) = send_response(stream, status_code, &headers, &body) {
                 log::error!("Failed to send response: {}", e);
             }
