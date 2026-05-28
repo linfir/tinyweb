@@ -16,6 +16,7 @@ use crate::{ContentType, Method, StatusCode, enc, sse::SseWriter};
 pub struct Config {
     /// Maximum number of concurrent connections.
     /// Excess connections receive a 503 response.
+    /// Setting this to 0 rejects all connections.
     /// Default: 100.
     pub max_connections: usize,
     /// Timeout for reading the request headers.
