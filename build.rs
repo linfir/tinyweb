@@ -26,6 +26,7 @@ fn parse_mime(src: &str) -> Vec<Mime<'_>> {
 
 fn generate_mime(types: &[Mime], dst: &mut String) {
     dst.push('\n');
+    dst.push_str("/// A content type (MIME type) for HTTP responses.\n");
     dst.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
     dst.push_str("pub enum ContentType {\n");
     for t in types {
@@ -34,6 +35,9 @@ fn generate_mime(types: &[Mime], dst: &mut String) {
     dst.push_str("\tDefault,\n}\n\n");
 
     dst.push_str("impl ContentType {\n");
+    dst.push_str(
+        "\t/// Returns the content type for the given file extension (without leading dot).\n",
+    );
     dst.push_str("\tpub fn from_extension(ext: Option<&str>) -> Self {\n");
     dst.push_str("\t\tmatch ext {\n");
     for t in types {
@@ -42,6 +46,7 @@ fn generate_mime(types: &[Mime], dst: &mut String) {
     dst.push_str("\t\t\t_ => Self::Default,\n");
     dst.push_str("\t\t}\n\t}\n\n");
 
+    dst.push_str("\t/// Returns the MIME type string (e.g. `\"text/html\"`).\n");
     dst.push_str("\tpub fn as_str(self) -> &'static str {\n");
     dst.push_str("\t\tmatch self {\n");
     for t in types {
@@ -62,6 +67,7 @@ fn parse_method(src: &str) -> Vec<&str> {
 
 fn generate_method(methods: &[&str], dst: &mut String) {
     dst.push('\n');
+    dst.push_str("/// An HTTP request method.\n");
     dst.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
     dst.push_str("pub enum Method {\n");
     for m in methods {
@@ -70,6 +76,7 @@ fn generate_method(methods: &[&str], dst: &mut String) {
     dst.push_str("}\n\n");
 
     dst.push_str("impl Method {\n");
+    dst.push_str("\t/// Parses an HTTP method from its byte representation.\n");
     dst.push_str("\tpub fn from_bytes(s: &[u8]) -> Option<Self> {\n");
     dst.push_str("\t\tmatch s {\n");
     for m in methods {
@@ -153,15 +160,17 @@ fn parse_status_code(src: &str) -> Vec<StatusCode<'_>> {
 
 fn generate_status_code(codes: &[StatusCode], dst: &mut String) {
     dst.push('\n');
+    dst.push_str("/// An HTTP status code.\n");
     dst.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
     dst.push_str("pub enum StatusCode {\n");
     for c in codes {
-        let _ = writeln!(dst, "\t/// HTTP {}", c.code);
+        let _ = writeln!(dst, "\t/// HTTP/1.1 {} {}", c.code, c.text);
         let _ = writeln!(dst, "\t{},", c.variant);
     }
     dst.push_str("}\n\n");
 
     dst.push_str("impl StatusCode {\n");
+    dst.push_str("\t/// Returns the numeric status code.\n");
     dst.push_str("\tpub fn as_u16(self) -> u16 {\n");
     dst.push_str("\t\tmatch self {\n");
     for c in codes {
@@ -169,6 +178,7 @@ fn generate_status_code(codes: &[StatusCode], dst: &mut String) {
     }
     dst.push_str("\t\t}\n\t}\n\n");
 
+    dst.push_str("\t/// Returns the reason phrase (e.g. `\"OK\"`, `\"Not Found\"`).\n");
     dst.push_str("\tpub fn as_str(self) -> &'static str {\n");
     dst.push_str("\t\tmatch self {\n");
     for c in codes {

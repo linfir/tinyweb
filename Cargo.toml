@@ -1,6 +1,13 @@
 [package]
-name = "miniweb"
+name = "tinyweb"
+version = "0.1.0"
 edition = "2024"
+description = "Minimal synchronous HTTP/1.1 server with SSE support"
+license = "MIT"
+keywords = ["http", "server", "sse", "web", "minimal"]
+categories = ["web-programming::http-server", "network-programming"]
+repository = "https://github.com/linfir/tinyweb"
+readme = "README.md"
 
 [dependencies]
 log = "0.4.27"

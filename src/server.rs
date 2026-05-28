@@ -25,14 +25,26 @@ impl Drop for ActiveGuard {
     }
 }
 
+/// An incoming HTTP request.
+///
+/// Passed by reference to the handler closure given to [`serve`].
+/// Only the request line and headers are available; the request body is not read.
 pub struct Request {
+    /// The HTTP method.
     pub method: Method,
+    /// The percent-decoded request path (e.g. `/foo/bar`).
     pub path: String,
+    /// Parsed query-string parameters, percent-decoded.
     pub query: HashMap<String, String>,
-    /// Header keys are lowercase
+    /// Request headers. Keys are lowercased (e.g. `"content-type"`).
     pub headers: HashMap<String, String>,
 }
 
+/// An HTTP response returned by the handler closure.
+///
+/// Construct one using the associated builder methods: [`Response::ok`],
+/// [`Response::file`], [`Response::not_found`], [`Response::error`],
+/// [`Response::redirect`], or [`Response::sse`].
 pub struct Response(ResponseImpl);
 
 enum ResponseImpl {
@@ -46,6 +58,11 @@ enum ResponseImpl {
     },
 }
 
+/// Binds to `addr` and starts handling incoming connections.
+///
+/// Each request is dispatched to `handler` on its own thread. The function
+/// never returns. Up to 100 concurrent connections are served; excess
+/// connections receive a 503 response. Read and write timeouts are 5 seconds.
 pub fn serve<A, F>(addr: A, handler: F) -> !
 where
     A: ToSocketAddrs,
@@ -78,6 +95,7 @@ where
 }
 
 impl Response {
+    /// Returns a 404 Not Found response with an empty body.
     pub fn not_found() -> Self {
         Response(ResponseImpl::Regular {
             status_code: StatusCode::NotFound,
@@ -86,6 +104,7 @@ impl Response {
         })
     }
 
+    /// Returns a response with the given (error) status code and an empty body.
     pub fn error(status_code: StatusCode) -> Self {
         Response(ResponseImpl::Regular {
             status_code,
@@ -94,6 +113,7 @@ impl Response {
         })
     }
 
+    /// Returns a 200 OK response with the given content type and body.
     pub fn ok(content_type: ContentType, body: impl Into<Vec<u8>>) -> Self {
         Response(ResponseImpl::Regular {
             status_code: StatusCode::Ok,
@@ -102,6 +122,11 @@ impl Response {
         })
     }
 
+    /// Returns a 200 OK response with a MIME type inferred from `ext`.
+    ///
+    /// `ext` should be the file extension without a leading dot (e.g. `"html"`).
+    /// If the extension is unknown, `application/octet-stream` is used and a
+    /// warning is logged.
     pub fn file(ext: Option<&str>, body: impl Into<Vec<u8>>) -> Self {
         let mime = ContentType::from_extension(ext);
         if mime == ContentType::Default {
@@ -114,7 +139,10 @@ impl Response {
         })
     }
 
-    /// fails if the target contains CR or LF
+    /// Returns a 307 Temporary Redirect to `to`.
+    ///
+    /// Returns `Err` if `to` contains CR (`\r`) or LF (`\n`),
+    /// which would corrupt the response headers.
     pub fn redirect(to: &str) -> Result<Self, &'static str> {
         if to.contains(['\r', '\n']) {
             return Err("redirect target must not contain CR or LF");
@@ -126,6 +154,11 @@ impl Response {
         }))
     }
 
+    /// Returns a Server-Sent Events response.
+    ///
+    /// `handler` is called synchronously on the connection thread
+    /// with a [`SseWriter`] to send events.
+    /// The connection closes when `handler` returns.
     pub fn sse<F>(handler: F) -> Self
     where
         F: FnOnce(&mut SseWriter) + Send + 'static,
