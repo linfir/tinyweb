@@ -56,7 +56,8 @@ pub struct Request {
     /// The percent-decoded request path (e.g. `/foo/bar`).
     pub path: String,
     /// Parsed query-string parameters, percent-decoded.
-    pub query: HashMap<String, String>,
+    /// If a key appears more than once, all values are collected in order.
+    pub query: HashMap<String, Vec<String>>,
     /// Request headers. Keys are lowercased (e.g. `"content-type"`).
     pub headers: HashMap<String, String>,
 }
@@ -287,7 +288,7 @@ fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
 struct RequestLine {
     method: Method,
     path: String,
-    query_map: HashMap<String, String>,
+    query_map: HashMap<String, Vec<String>>,
 }
 
 impl RequestLine {
@@ -324,7 +325,7 @@ impl RequestLine {
             return None;
         }
 
-        let mut query_map = HashMap::new();
+        let mut query_map: HashMap<String, Vec<String>> = HashMap::new();
         if !query.is_empty() {
             for pair in query.split(|&b| b == b'&') {
                 let mut parts = pair.splitn(2, |&b| b == b'=');
@@ -333,7 +334,7 @@ impl RequestLine {
                 if !key.is_empty() {
                     let key = enc::percent_decode(key)?;
                     let value = enc::percent_decode(value)?;
-                    query_map.insert(key, value);
+                    query_map.entry(key).or_default().push(value);
                 }
             }
         }
@@ -442,8 +443,15 @@ fn test_parse_get_with_query() {
     let req_line = RequestLine::parse(line).unwrap();
     assert_eq!(req_line.method, Method::GET);
     assert_eq!(req_line.path, "/search");
-    assert_eq!(req_line.query_map.get("q"), Some(&"rust".to_string()));
-    assert_eq!(req_line.query_map.get("lang"), Some(&"en".to_string()));
+    assert_eq!(req_line.query_map["q"], ["rust"]);
+    assert_eq!(req_line.query_map["lang"], ["en"]);
+}
+
+#[test]
+fn test_parse_repeated_query_key() {
+    let line = b"GET /items?tag=a&tag=b HTTP/1.1";
+    let req_line = RequestLine::parse(line).unwrap();
+    assert_eq!(req_line.query_map["tag"], ["a", "b"]);
 }
 
 #[test]
