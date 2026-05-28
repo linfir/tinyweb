@@ -1,10 +1,10 @@
-200  Ok                  OK
-307  TemporaryRedirect   Temporary Redirect
-400  BadRequest          Bad Request
-403  Forbidden           Forbidden
-404  NotFound            Not Found
-405  MethodNotAllowed    Method Not Allowed
-408  RequestTimeout      Request Timeout
-413  ContentTooLarge     Content Too Large
-501  NotImplemented      Not Implemented
-503  ServiceUnavailable  Service Unavailable
+200  OK
+307  Temporary Redirect
+400  Bad Request
+403  Forbidden
+404  Not Found
+405  Method Not Allowed
+408  Request Timeout
+413  Content Too Large
+501  Not Implemented
+503  Service Unavailable

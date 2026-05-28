@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{ContentType, Method, StatusCode, enc, sse::SseWriter};
+use crate::{ContentType, HeaderName, Method, StatusCode, enc, sse::SseWriter};
 
 /// Configuration for [`serve`].
 pub struct Config {
@@ -52,11 +52,6 @@ impl Drop for ActiveGuard {
 }
 
 /// An incoming HTTP request.
-///
-/// Passed by reference to the handler closure given to [`serve`].
-/// The request line, headers, and body are available. The body is read up to
-/// [`Config::max_body_size`] bytes; `application/x-www-form-urlencoded` bodies
-/// are also parsed into [`Request::form`].
 #[non_exhaustive]
 pub struct Request {
     /// The HTTP method.
@@ -70,7 +65,6 @@ pub struct Request {
     /// Keys are lowercased (e.g. `"content-type"`).
     pub headers: HashMap<String, String>,
     /// Raw request body bytes.
-    /// Empty when the request has no body.
     /// Requests exceeding [`Config::max_body_size`] are rejected with 413.
     pub body: Vec<u8>,
     /// Parsed `application/x-www-form-urlencoded` form fields.
@@ -79,38 +73,73 @@ pub struct Request {
     pub form: HashMap<String, Vec<String>>,
 }
 
-/// An HTTP response returned by the handler closure.
-///
-/// Construct one using the associated builder methods:
-/// [`Response::ok`],
-/// [`Response::file`],
-/// [`Response::not_found`],
-/// [`Response::error`],
-/// [`Response::redirect`], or
-/// [`Response::sse`].
-pub struct Response(ResponseImpl);
+/// An HTTP header value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderValue(String);
 
-enum ResponseImpl {
-    Regular {
-        status_code: StatusCode,
-        headers: Vec<(String, String)>,
-        body: Vec<u8>,
-    },
-    Sse {
-        sse_handler: Box<dyn FnOnce(&mut SseWriter) + Send + 'static>,
-    },
+impl HeaderValue {
+    /// Returns `Err` if `value` contains CR (`\r`) or LF (`\n`).
+    pub fn new(value: &str) -> Result<Self, &'static str> {
+        if value.contains(['\r', '\n']) {
+            return Err("header value must not contain CR or LF");
+        }
+        Ok(HeaderValue(value.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A regular HTTP response.
+pub struct Response {
+    status_code: StatusCode,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// A Server-Sent Events response.
+pub struct SseResponse(Box<dyn FnOnce(&mut SseWriter) + Send + 'static>);
+
+impl SseResponse {
+    /// `handler` is called synchronously on the connection thread; the connection closes when it returns.
+    pub fn new<F>(handler: F) -> Self
+    where
+        F: FnOnce(&mut SseWriter) + Send + 'static,
+    {
+        SseResponse(Box::new(handler))
+    }
+}
+
+enum AnyResponseImpl {
+    Regular(Response),
+    Sse(SseResponse),
+}
+
+/// The return type of a request handler.
+pub struct AnyResponse(AnyResponseImpl);
+
+impl From<Response> for AnyResponse {
+    fn from(r: Response) -> Self {
+        AnyResponse(AnyResponseImpl::Regular(r))
+    }
+}
+
+impl From<SseResponse> for AnyResponse {
+    fn from(r: SseResponse) -> Self {
+        AnyResponse(AnyResponseImpl::Sse(r))
+    }
 }
 
 /// Binds to `addr` and starts handling incoming connections.
 ///
 /// Each request is dispatched to `handler` on its own thread.
-/// The function never returns.
-/// Limits are controlled by `config`;
-/// use [`Config::default`] for sensible defaults.
-pub fn serve<A, F>(addr: A, config: Config, handler: F) -> !
+/// Limits are controlled by `config`; use [`Config::default`] for sensible defaults.
+pub fn serve<A, F, R>(addr: A, config: Config, handler: F) -> !
 where
     A: ToSocketAddrs,
-    F: Fn(&Request) -> Response + Send + Sync + 'static,
+    F: Fn(&Request) -> R + Send + Sync + 'static,
+    R: Into<AnyResponse>,
 {
     let listener = TcpListener::bind(addr).expect("Cannot start server");
     let handler = Arc::new(handler);
@@ -142,31 +171,53 @@ where
 }
 
 impl Response {
-    /// Returns a 404 Not Found response with an empty body.
-    pub fn not_found() -> Self {
-        Response(ResponseImpl::Regular {
-            status_code: StatusCode::NotFound,
+    /// Returns a 200 OK response with no headers and an empty body.
+    pub fn new() -> Self {
+        Response {
+            status_code: StatusCode::Ok,
             headers: Vec::new(),
             body: Vec::new(),
-        })
+        }
+    }
+
+    /// Returns the response with the status code replaced.
+    pub fn with_status(mut self, status_code: StatusCode) -> Self {
+        self.status_code = status_code;
+        self
+    }
+
+    /// Returns the response with the given body and a `Content-Type` header.
+    pub fn with_body(mut self, content_type: ContentType, body: impl Into<Vec<u8>>) -> Self {
+        self.headers.push((
+            HeaderName::CONTENT_TYPE.as_str().to_string(),
+            content_type.as_str().to_string(),
+        ));
+        self.body = body.into();
+        self
+    }
+
+    /// Returns the response with an additional HTTP header.
+    pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
+        self.headers
+            .push((name.as_str().to_string(), value.as_str().to_string()));
+        self
+    }
+}
+
+impl Response {
+    /// Returns a 404 Not Found response with an empty body.
+    pub fn not_found() -> Self {
+        Self::error(StatusCode::NotFound)
     }
 
     /// Returns a response with the given (error) status code and an empty body.
     pub fn error(status_code: StatusCode) -> Self {
-        Response(ResponseImpl::Regular {
-            status_code,
-            headers: Vec::new(),
-            body: Vec::new(),
-        })
+        Self::new().with_status(status_code)
     }
 
     /// Returns a 200 OK response with the given content type and body.
     pub fn ok(content_type: ContentType, body: impl Into<Vec<u8>>) -> Self {
-        Response(ResponseImpl::Regular {
-            status_code: StatusCode::Ok,
-            headers: vec![("Content-Type".into(), content_type.as_str().into())],
-            body: body.into(),
-        })
+        Self::new().with_body(content_type, body)
     }
 
     /// Returns a 200 OK response with a MIME type inferred from `ext`.
@@ -179,51 +230,35 @@ impl Response {
         if mime == ContentType::Default {
             log::warn!("Unknown file extension: {:?}", ext);
         }
-        Response(ResponseImpl::Regular {
-            status_code: StatusCode::Ok,
-            headers: vec![("Content-Type".into(), mime.as_str().into())],
-            body: body.into(),
-        })
+        Self::new().with_body(mime, body)
     }
 
     /// Returns a 307 Temporary Redirect to `to`.
     ///
-    /// Returns `Err` if `to` contains CR (`\r`) or LF (`\n`),
-    /// which would corrupt the response headers.
-    pub fn redirect(to: &str) -> Result<Self, &'static str> {
-        if to.contains(['\r', '\n']) {
-            return Err("redirect target must not contain CR or LF");
-        }
-        Ok(Response(ResponseImpl::Regular {
-            status_code: StatusCode::TemporaryRedirect,
-            headers: vec![("Location".into(), to.into())],
-            body: Vec::new(),
-        }))
-    }
-
-    /// Returns a Server-Sent Events response.
-    ///
-    /// `handler` is called synchronously on the connection thread
-    /// with a [`SseWriter`] to send events.
-    /// The connection closes when `handler` returns.
-    pub fn sse<F>(sse_handler: F) -> Self
-    where
-        F: FnOnce(&mut SseWriter) + Send + 'static,
-    {
-        Response(ResponseImpl::Sse {
-            sse_handler: Box::new(sse_handler),
-        })
+    /// Use [`HeaderValue::new`] to construct the target URL,
+    /// which validates that it contains no CR or LF.
+    pub fn redirect(to: HeaderValue) -> Self {
+        Self::new()
+            .with_status(StatusCode::TemporaryRedirect)
+            .with_header(HeaderName::LOCATION, to)
     }
 }
 
-fn handle_stream<F>(
+impl Default for Response {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn handle_stream<F, R>(
     mut stream: TcpStream,
     req_handler: Arc<F>,
     read_timeout: Duration,
     write_timeout: Duration,
     max_body_size: usize,
 ) where
-    F: Fn(&Request) -> Response + Send + Sync + 'static,
+    F: Fn(&Request) -> R + Send + Sync + 'static,
+    R: Into<AnyResponse>,
 {
     let deadline = Instant::now() + read_timeout;
     let mut buf = [0; 8 * 1024];
@@ -276,17 +311,17 @@ fn handle_stream<F>(
         stream.set_write_timeout(Some(write_timeout)).unwrap();
     }
 
-    match req_handler(&req).0 {
-        ResponseImpl::Regular {
+    match req_handler(&req).into().0 {
+        AnyResponseImpl::Regular(Response {
             status_code,
             headers,
             body,
-        } => {
+        }) => {
             if let Err(e) = send_response(stream, status_code, &headers, &body) {
                 log::error!("Failed to send response: {}", e);
             }
         }
-        ResponseImpl::Sse { sse_handler } => {
+        AnyResponseImpl::Sse(SseResponse(sse_handler)) => {
             if let Err(e) = send_sse_headers(&mut stream) {
                 log::error!("Failed to send SSE headers: {}", e);
                 return;

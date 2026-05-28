@@ -1,0 +1,14 @@
+Content-Type
+Location
+Cache-Control
+Content-Disposition
+Set-Cookie
+Access-Control-Allow-Origin
+Access-Control-Allow-Methods
+Access-Control-Allow-Headers
+Access-Control-Allow-Credentials
+Access-Control-Max-Age
+Access-Control-Expose-Headers
+Strict-Transport-Security
+X-Content-Type-Options
+X-Frame-Options
