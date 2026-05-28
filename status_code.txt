@@ -5,4 +5,6 @@
 404  NotFound            Not Found
 405  MethodNotAllowed    Method Not Allowed
 408  RequestTimeout      Request Timeout
+413  ContentTooLarge     Content Too Large
+501  NotImplemented      Not Implemented
 503  ServiceUnavailable  Service Unavailable

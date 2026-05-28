@@ -19,12 +19,16 @@ pub struct Config {
     /// Setting this to 0 rejects all connections.
     /// Default: 100.
     pub max_connections: usize,
-    /// Timeout for reading the request headers.
+    /// Timeout for reading the request headers and body.
     /// Default: 5 seconds.
     pub read_timeout: Duration,
     /// Timeout for writing the response.
     /// Default: 5 seconds.
     pub write_timeout: Duration,
+    /// Maximum request body size in bytes.
+    /// Bodies larger than this limit receive a 413 response.
+    /// Default: 65536 (64 KB).
+    pub max_body_size: usize,
 }
 
 impl Default for Config {
@@ -33,6 +37,7 @@ impl Default for Config {
             max_connections: 100,
             read_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
+            max_body_size: 64 * 1024,
         }
     }
 }
@@ -49,7 +54,10 @@ impl Drop for ActiveGuard {
 /// An incoming HTTP request.
 ///
 /// Passed by reference to the handler closure given to [`serve`].
-/// Only the request line and headers are available; the request body is not read.
+/// The request line, headers, and body are available. The body is read up to
+/// [`Config::max_body_size`] bytes; `application/x-www-form-urlencoded` bodies
+/// are also parsed into [`Request::form`].
+#[non_exhaustive]
 pub struct Request {
     /// The HTTP method.
     pub method: Method,
@@ -58,15 +66,28 @@ pub struct Request {
     /// Parsed query-string parameters, percent-decoded.
     /// If a key appears more than once, all values are collected in order.
     pub query: HashMap<String, Vec<String>>,
-    /// Request headers. Keys are lowercased (e.g. `"content-type"`).
+    /// Request headers.
+    /// Keys are lowercased (e.g. `"content-type"`).
     pub headers: HashMap<String, String>,
+    /// Raw request body bytes.
+    /// Empty when the request has no body.
+    /// Requests exceeding [`Config::max_body_size`] are rejected with 413.
+    pub body: Vec<u8>,
+    /// Parsed `application/x-www-form-urlencoded` form fields.
+    /// Keys and values are percent-decoded; `+` is treated as a space.
+    /// Only populated when `Content-Type: application/x-www-form-urlencoded`.
+    pub form: HashMap<String, Vec<String>>,
 }
 
 /// An HTTP response returned by the handler closure.
 ///
-/// Construct one using the associated builder methods: [`Response::ok`],
-/// [`Response::file`], [`Response::not_found`], [`Response::error`],
-/// [`Response::redirect`], or [`Response::sse`].
+/// Construct one using the associated builder methods:
+/// [`Response::ok`],
+/// [`Response::file`],
+/// [`Response::not_found`],
+/// [`Response::error`],
+/// [`Response::redirect`], or
+/// [`Response::sse`].
 pub struct Response(ResponseImpl);
 
 enum ResponseImpl {
@@ -76,15 +97,16 @@ enum ResponseImpl {
         body: Vec<u8>,
     },
     Sse {
-        handler: Box<dyn FnOnce(&mut SseWriter) + Send + 'static>,
+        sse_handler: Box<dyn FnOnce(&mut SseWriter) + Send + 'static>,
     },
 }
 
 /// Binds to `addr` and starts handling incoming connections.
 ///
-/// Each request is dispatched to `handler` on its own thread. The function
-/// never returns. Limits are controlled by `config`; use [`Config::default`]
-/// for sensible defaults.
+/// Each request is dispatched to `handler` on its own thread.
+/// The function never returns.
+/// Limits are controlled by `config`;
+/// use [`Config::default`] for sensible defaults.
 pub fn serve<A, F>(addr: A, config: Config, handler: F) -> !
 where
     A: ToSocketAddrs,
@@ -105,9 +127,10 @@ where
                 let active = active.clone();
                 let read_timeout = config.read_timeout;
                 let write_timeout = config.write_timeout;
+                let max_body_size = config.max_body_size;
                 thread::spawn(move || {
                     let _guard = ActiveGuard(active);
-                    handle_stream(stream, handler, read_timeout, write_timeout);
+                    handle_stream(stream, handler, read_timeout, write_timeout, max_body_size);
                 });
             }
             Err(e) => {
@@ -149,8 +172,8 @@ impl Response {
     /// Returns a 200 OK response with a MIME type inferred from `ext`.
     ///
     /// `ext` should be the file extension without a leading dot (e.g. `"html"`).
-    /// If the extension is unknown, `application/octet-stream` is used and a
-    /// warning is logged.
+    /// If the extension is unknown, `application/octet-stream` is used
+    /// and a warning is logged.
     pub fn file(ext: Option<&str>, body: impl Into<Vec<u8>>) -> Self {
         let mime = ContentType::from_extension(ext);
         if mime == ContentType::Default {
@@ -183,57 +206,77 @@ impl Response {
     /// `handler` is called synchronously on the connection thread
     /// with a [`SseWriter`] to send events.
     /// The connection closes when `handler` returns.
-    pub fn sse<F>(handler: F) -> Self
+    pub fn sse<F>(sse_handler: F) -> Self
     where
         F: FnOnce(&mut SseWriter) + Send + 'static,
     {
         Response(ResponseImpl::Sse {
-            handler: Box::new(handler),
+            sse_handler: Box::new(sse_handler),
         })
     }
 }
 
 fn handle_stream<F>(
     mut stream: TcpStream,
-    handler: Arc<F>,
+    req_handler: Arc<F>,
     read_timeout: Duration,
     write_timeout: Duration,
+    max_body_size: usize,
 ) where
     F: Fn(&Request) -> Response + Send + Sync + 'static,
 {
     let deadline = Instant::now() + read_timeout;
-
     let mut buf = [0; 8 * 1024];
-    let mut total = 0;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return send_error(stream, StatusCode::BadRequest);
-        }
-        stream.set_read_timeout(Some(remaining)).unwrap(); // safe
-        match stream.read(&mut buf[total..]) {
-            Ok(0) => break,
-            Ok(n) => {
-                total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-                if total == buf.len() {
-                    break;
-                }
-            }
+
+    let Some((head, body_start)) = read_request_head(&stream, deadline, &mut buf) else {
+        return send_error(stream, StatusCode::BadRequest);
+    };
+
+    let Some(mut req) = parse_request(head) else {
+        return send_error(stream, StatusCode::BadRequest);
+    };
+
+    if req.headers.contains_key("transfer-encoding") {
+        return send_error(stream, StatusCode::NotImplemented);
+    }
+
+    let content_length: usize = match req.headers.get("content-length") {
+        None => 0,
+        Some(v) => match v.parse() {
+            Ok(n) => n,
             Err(_) => return send_error(stream, StatusCode::BadRequest),
+        },
+    };
+
+    if content_length > 0 {
+        if content_length > max_body_size {
+            return send_error(stream, StatusCode::ContentTooLarge);
+        }
+
+        match read_request_body(&stream, deadline, body_start, content_length) {
+            Some(body) => req.body = body,
+            None => return send_error(stream, StatusCode::BadRequest),
+        };
+
+        let is_form = req
+            .headers
+            .get("content-type")
+            .map(|v| v.starts_with("application/x-www-form-urlencoded"))
+            .unwrap_or(false);
+
+        if is_form {
+            match parse_urlencoded(&req.body, true) {
+                Some(map) => req.form = map,
+                None => return send_error(stream, StatusCode::BadRequest),
+            }
         }
     }
 
-    let req = match parse_request(&buf[..total]) {
-        Ok(x) => x,
-        Err(err) => return send_error(stream, err),
-    };
+    if !write_timeout.is_zero() {
+        stream.set_write_timeout(Some(write_timeout)).unwrap();
+    }
 
-    stream.set_write_timeout(Some(write_timeout)).unwrap(); // safe
-
-    match handler(&req).0 {
+    match req_handler(&req).0 {
         ResponseImpl::Regular {
             status_code,
             headers,
@@ -243,20 +286,82 @@ fn handle_stream<F>(
                 log::error!("Failed to send response: {}", e);
             }
         }
-        ResponseImpl::Sse { handler } => {
+        ResponseImpl::Sse { sse_handler } => {
             if let Err(e) = send_sse_headers(&mut stream) {
                 log::error!("Failed to send SSE headers: {}", e);
                 return;
             }
             let mut writer = SseWriter::new(stream);
-            handler(&mut writer);
+            sse_handler(&mut writer);
         }
     }
 }
 
-fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
-    let first = next_line(&mut buf).ok_or(StatusCode::BadRequest)?;
-    let req_line = RequestLine::parse(first).ok_or(StatusCode::BadRequest)?;
+fn read_request_head<'a>(
+    mut stream: &TcpStream,
+    deadline: Instant,
+    buf: &'a mut [u8],
+) -> Option<(&'a [u8], &'a [u8])> {
+    let sep = b"\r\n\r\n";
+    let mut end = 0;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        stream.set_read_timeout(Some(remaining)).unwrap();
+        match stream.read(&mut buf[end..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                let search_from = end.saturating_sub(sep.len() - 1);
+                end += n;
+                if let Some(p) = buf[search_from..end]
+                    .windows(sep.len())
+                    .position(|w| w == sep)
+                {
+                    let pos = search_from + p;
+                    return Some((&buf[..pos + sep.len()], &buf[pos + sep.len()..end]));
+                }
+                if end == buf.len() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    None
+}
+
+fn read_request_body(
+    mut stream: &TcpStream,
+    deadline: Instant,
+    body_start: &[u8],
+    content_length: usize,
+) -> Option<Vec<u8>> {
+    let mut body = vec![0u8; content_length];
+    let mut pos = body_start.len().min(content_length);
+    body[..pos].copy_from_slice(&body_start[..pos]);
+    while pos < content_length {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        stream.set_read_timeout(Some(remaining)).unwrap();
+        match stream.read(&mut body[pos..]) {
+            Ok(0) => return None,
+            Ok(n) => pos += n,
+            Err(_) => return None,
+        }
+    }
+    Some(body)
+}
+
+// Parse the request line and headers from `buf`.
+// The body is not read and `Request::body` is empty.
+fn parse_request(mut buf: &[u8]) -> Option<Request> {
+    let first = next_line(&mut buf)?;
+    let req_line = RequestLine::parse(first)?;
 
     let mut headers = HashMap::new();
     let mut found_end = false;
@@ -265,7 +370,7 @@ fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
             found_end = true;
             break;
         }
-        let header = Header::parse(line).ok_or(StatusCode::BadRequest)?;
+        let header = Header::parse(line)?;
         let entry = headers.entry(header.key).or_insert_with(String::new);
         if !entry.is_empty() {
             entry.push_str(", ");
@@ -274,14 +379,16 @@ fn parse_request(mut buf: &[u8]) -> Result<Request, StatusCode> {
     }
 
     if !found_end || !headers.contains_key("host") {
-        return Err(StatusCode::BadRequest);
+        return None;
     }
 
-    Ok(Request {
+    Some(Request {
         method: req_line.method,
         path: req_line.path,
         query: req_line.query_map,
         headers,
+        body: Vec::new(),
+        form: HashMap::new(),
     })
 }
 
@@ -325,19 +432,7 @@ impl RequestLine {
             return None;
         }
 
-        let mut query_map: HashMap<String, Vec<String>> = HashMap::new();
-        if !query.is_empty() {
-            for pair in query.split(|&b| b == b'&') {
-                let mut parts = pair.splitn(2, |&b| b == b'=');
-                let key = parts.next().unwrap_or(b"");
-                let value = parts.next().unwrap_or(b"");
-                if !key.is_empty() {
-                    let key = enc::percent_decode(key)?;
-                    let value = enc::percent_decode(value)?;
-                    query_map.entry(key).or_default().push(value);
-                }
-            }
-        }
+        let query_map = parse_urlencoded(query, false)?;
 
         Some(RequestLine {
             method,
@@ -364,6 +459,34 @@ impl Header {
             key: key.to_ascii_lowercase(),
             value: value.trim().to_string(),
         })
+    }
+}
+
+fn parse_urlencoded(input: &[u8], plus_as_space: bool) -> Option<HashMap<String, Vec<String>>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for pair in input.split(|&b| b == b'&') {
+        let mut parts = pair.splitn(2, |&b| b == b'=');
+        let key = parts.next().unwrap_or(b"");
+        let value = parts.next().unwrap_or(b"");
+        if key.is_empty() {
+            continue;
+        }
+        let key = decode_field(key, plus_as_space)?;
+        let value = decode_field(value, plus_as_space)?;
+        map.entry(key).or_default().push(value);
+    }
+    Some(map)
+}
+
+fn decode_field(input: &[u8], plus_as_space: bool) -> Option<String> {
+    if plus_as_space && input.contains(&b'+') {
+        let replaced: Vec<u8> = input
+            .iter()
+            .map(|&b| if b == b'+' { b' ' } else { b })
+            .collect();
+        enc::percent_decode(&replaced)
+    } else {
+        enc::percent_decode(input)
     }
 }
 
@@ -511,4 +634,68 @@ fn test_parse_rejects_dot_dot_segments() {
 fn test_parse_allows_triple_dot() {
     let req_line = RequestLine::parse(b"GET /foo/.../bar HTTP/1.1").unwrap();
     assert_eq!(req_line.path, "/foo/.../bar");
+}
+
+#[test]
+fn test_parse_urlencoded_basic() {
+    let map = parse_urlencoded(b"name=Alice&age=30", false).unwrap();
+    assert_eq!(map["name"], ["Alice"]);
+    assert_eq!(map["age"], ["30"]);
+}
+
+#[test]
+fn test_parse_urlencoded_plus_as_space() {
+    let map = parse_urlencoded(b"greeting=hello+world", true).unwrap();
+    assert_eq!(map["greeting"], ["hello world"]);
+}
+
+#[test]
+fn test_parse_urlencoded_plus_literal_without_flag() {
+    let map = parse_urlencoded(b"greeting=hello+world", false).unwrap();
+    assert_eq!(map["greeting"], ["hello+world"]);
+}
+
+#[test]
+fn test_parse_urlencoded_percent_encoded() {
+    let map = parse_urlencoded(b"city=San%20Francisco", true).unwrap();
+    assert_eq!(map["city"], ["San Francisco"]);
+}
+
+#[test]
+fn test_parse_urlencoded_repeated_key() {
+    let map = parse_urlencoded(b"tag=a&tag=b&tag=c", false).unwrap();
+    assert_eq!(map["tag"], ["a", "b", "c"]);
+}
+
+#[test]
+fn test_parse_urlencoded_empty_value() {
+    let map = parse_urlencoded(b"key=", false).unwrap();
+    assert_eq!(map["key"], [""]);
+}
+
+#[test]
+fn test_parse_urlencoded_empty_key_skipped() {
+    let map = parse_urlencoded(b"=value&real=yes", false).unwrap();
+    assert!(!map.contains_key(""));
+    assert_eq!(map["real"], ["yes"]);
+}
+
+#[test]
+fn test_parse_urlencoded_invalid_percent() {
+    assert!(parse_urlencoded(b"key=hello%ZZworld", false).is_none());
+}
+
+#[test]
+fn test_parse_urlencoded_empty_input() {
+    let map = parse_urlencoded(b"", false).unwrap();
+    assert!(map.is_empty());
+}
+
+#[test]
+fn test_parse_request_post_no_body() {
+    let raw = b"POST /submit HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    let req = parse_request(raw).unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert!(req.body.is_empty());
+    assert!(req.form.is_empty());
 }
