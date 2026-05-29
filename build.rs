@@ -15,11 +15,18 @@ fn parse_mime(src: &str) -> Vec<Mime<'_>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let mut parts = line.split_whitespace();
-        let ext = parts.next().expect("Missing extension");
-        let mime = parts.next().expect("Missing mime type");
-        let variant = parts.next().expect("Missing variant name");
-        types.push(Mime { ext, mime, variant });
+        let (ext, rest) = line
+            .split_once(char::is_whitespace)
+            .expect("Missing mime type");
+        let rest = rest.trim();
+        let (mime, variant) = rest
+            .rsplit_once(char::is_whitespace)
+            .expect("Missing variant");
+        types.push(Mime {
+            ext,
+            mime: mime.trim_end(),
+            variant,
+        });
     }
     types
 }

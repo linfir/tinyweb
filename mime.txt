@@ -1,25 +1,25 @@
-txt    text/plain              Plain
-html   text/html               Html
-css    text/css                Css
-js     application/javascript  Js
-svg    image/svg+xml           Svg
-tex    application/x-latex     Latex
-pdf    application/pdf         Pdf
-woff   font/woff               Woff
-woff2  font/woff2              Woff2
-ttf    font/ttf                Ttf
-otf    font/otf                Otf
-png    image/png               Png
-jpg    image/jpeg              Jpg
-jpeg   image/jpeg              Jpeg
-webp   image/webp              Webp
-gif    image/gif               Gif
-ico    image/x-icon            Ico
-json   application/json        Json
-xml    application/xml         Xml
-map    application/json        Map
-wasm   application/wasm        Wasm
-mp4    video/mp4               Mp4
-webm   video/webm              Webm
-mp3    audio/mpeg              Mp3
-ogg    audio/ogg               Ogg
+txt     text/plain; charset=utf-8            Plain
+html    text/html; charset=utf-8             Html
+css     text/css; charset=utf-8              Css
+js      text/javascript                      Js
+svg     image/svg+xml; charset=utf-8         Svg
+tex     application/x-latex; charset=utf-8   Latex
+pdf     application/pdf                      Pdf
+woff    font/woff                            Woff
+woff2   font/woff2                           Woff2
+ttf     font/ttf                             Ttf
+otf     font/otf                             Otf
+png     image/png                            Png
+jpg     image/jpeg                           Jpg
+jpeg    image/jpeg                           Jpeg
+webp    image/webp                           Webp
+gif     image/gif                            Gif
+ico     image/x-icon                         Ico
+json    application/json                     Json
+xml     application/xml; charset=utf-8       Xml
+map     application/json                     Map
+wasm    application/wasm                     Wasm
+mp4     video/mp4                            Mp4
+webm    video/webm                           Webm
+mp3     audio/mpeg                           Mp3
+ogg     audio/ogg                            Ogg
