@@ -90,7 +90,16 @@ fn generate_method(methods: &[&str], dst: &mut String) {
         let _ = writeln!(dst, "\t\t\tb\"{}\" => Some(Self::{}),", m, m);
     }
     dst.push_str("\t\t\t_ => None,\n");
-    dst.push_str("\t\t}\n\t}\n}\n");
+    dst.push_str("\t\t}\n\t}\n\n");
+
+    dst.push_str("\t/// Returns the string representation of the HTTP method.\n");
+    dst.push_str("\tpub fn as_str(self) -> &'static str {\n");
+    dst.push_str("\t\tmatch self {\n");
+    for m in methods {
+        let _ = writeln!(dst, "\t\t\tMethod::{} => \"{}\",", m, m);
+    }
+    dst.push_str("\t\t}\n\t}\n");
+    dst.push_str("}\n");
 }
 
 // ----------------------------------------------------------------------------
