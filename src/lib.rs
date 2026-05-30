@@ -2,19 +2,14 @@
 #![doc = include_str!("../README.md")]
 
 mod enc;
+mod generated;
 mod log;
 mod server;
 mod sse;
 
 use std::fmt;
 
-pub use crate::{server::*, sse::SseWriter};
-
-include!(concat!(env!("OUT_DIR"), "/generated.rs"));
-
-/// A content type (MIME type) for HTTP responses.
-#[derive(Debug, Clone)]
-pub struct ContentType(ContentTypeInner);
+pub use crate::{generated::*, server::*, sse::SseWriter};
 
 impl ContentType {
     /// Returns a custom content type from a MIME type string.
@@ -51,10 +46,6 @@ impl ContentType {
         }
     }
 }
-
-/// An HTTP header name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeaderName(HeaderNameInner);
 
 impl HeaderName {
     /// Returns a custom header name.

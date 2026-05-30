@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+
+
+def slurp(filename):
+    print(f"// --- {filename} " + "-" * (80 - len(filename) -8) + "\n")
+    with open(f"data/{filename}") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                yield line
+
+
+def gen_methods():
+    data = []
+    for line in slurp("method.txt"):
+        data.append(line)
+
+    print("/// An HTTP request method.")
+    print("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
+    print("pub enum Method {")
+    for m in data:
+        print(f"{m},")
+    print("}\n")
+    print("impl Method {")
+    print("/// Parses an HTTP method from its byte representation.")
+    print("pub fn from_bytes(s: &[u8]) -> Option<Self> {")
+    print("match s {")
+    for m in data:
+        print(f'b"{m}" => Some(Self::{m}),')
+    print("_ => None,")
+    print("}}\n")
+    print("/// Returns the string representation of the HTTP method.")
+    print("pub fn as_str(self) -> &'static str {")
+    print("match self {")
+    for m in data:
+        print(f'Method::{m} => "{m}",')
+    print("}}}\n")
+
+
+def gen_mimes():
+    data = []
+    for line in slurp("mime.txt"):
+        parts = line.split()
+        data.append((parts[0], " ".join(parts[1:-1]), parts[-1]))
+
+    print("#[derive(Clone)]")
+    print("pub(crate) enum ContentTypeInner {")
+    for ext, mime, variant in data:
+        print(f"{variant},")
+    print("Default, Custom(String) }\n")
+
+    print("impl ContentTypeInner {")
+    print("pub fn as_str(&self) -> &str {")
+    print("match self {")
+    for ext, mime, variant in data:
+        print(f'Self::{variant} => "{mime}",')
+    print('Self::Default => "application/octet-stream",')
+    print("Self::Custom(s) => s.as_str(),")
+    print("}}}\n")
+
+    print("/// A content type (MIME type) for HTTP responses.")
+    print("#[derive(Clone)]")
+    print("pub struct ContentType(pub(crate) ContentTypeInner);\n")
+
+    print("impl ContentType {")
+    print("/// Returns the content type for the given file extension (without leading dot),")
+    print("/// or `None` if the extension is not recognised.")
+    print("pub fn from_extension(ext: Option<&str>) -> Option<Self> {")
+    print("match ext {")
+    for ext, mime, variant in data:
+        print(f'Some("{ext}") => Some(Self::{variant.upper()}),')
+    print("_ => None,")
+    print("}}\n")
+    for ext, mime, variant in data:
+        print(f"/// The `{mime}` content type.")
+        print(f"pub const {variant.upper()}: Self = ContentType(ContentTypeInner::{variant});")
+    print("/// The default (`application/octet-stream`) content type.")
+    print("pub const DEFAULT: Self = ContentType(ContentTypeInner::Default);")
+    print("}\n")
+
+
+def gen_status_codes():
+    data = []
+    for line in slurp("status_code.txt"):
+        code, text = line.split(" ", 1)
+        text = text.strip()
+        variant = text.replace(" ", "") if text != "OK" else "Ok"
+        data.append((code, text, variant))
+
+    print("/// An HTTP status code.")
+    print("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
+    print("pub enum StatusCode {")
+    for code, text, variant in data:
+        print(f"/// HTTP/1.1 {code} {text}")
+        print(f"{variant},")
+    print("}\n")
+
+    print("impl StatusCode {")
+    print("/// Returns the numeric status code.")
+    print("pub fn as_u16(self) -> u16 {")
+    print("match self {")
+    for code, text, variant in data:
+        print(f"Self::{variant} => {code},")
+    print("}}\n")
+    print('/// Returns the reason phrase (e.g. `"OK"`, `"Not Found"`).')
+    print("pub fn as_str(self) -> &'static str {")
+    print("match self {")
+    for code, text, variant in data:
+        print(f'Self::{variant} => "{text}",')
+    print("}}}\n")
+
+
+def gen_header_names():
+    data = []
+    for line in slurp("header_name.txt"):
+        text = line
+        variant = text.replace("-", "")
+        constant = text.upper().replace("-", "_")
+        data.append((text, variant, constant))
+
+    print("#[derive(Debug, Clone, PartialEq, Eq)]")
+    print("pub(crate)enum HeaderNameInner {")
+    for text, variant, constant in data:
+        print(f"{variant},")
+    print("Custom(String),")
+    print("}\n")
+
+    print("impl HeaderNameInner {")
+    print("pub fn as_str(&self) -> &str {")
+    print("match self {")
+    for text, variant, constant in data:
+        print(f'Self::{variant} => "{text}",')
+    print("Self::Custom(s) => s.as_str(),")
+    print("}}}\n")
+
+    print("/// An HTTP header name.")
+    print("#[derive(Debug, Clone, PartialEq, Eq)]")
+    print("pub struct HeaderName(pub(crate) HeaderNameInner);\n")
+
+    print("impl HeaderName {")
+    for text, variant, constant in data:
+        print(f"/// The `{text}` header.")
+        print(f"pub const {constant}: Self = HeaderName(HeaderNameInner::{variant});")
+    print("}\n")
+
+
+if __name__ == "__main__":
+    print("// This file is @generated by `gen.py`\n")
+    gen_mimes()
+    gen_methods()
+    gen_status_codes()
+    gen_header_names()
