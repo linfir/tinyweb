@@ -1,6 +1,6 @@
 # tinyweb
 
-A minimal, zero-dependency, synchronous HTTP/1.1 server library
+A minimal, synchronous HTTP/1.1 server library with no dependencies by default
 intended for local development servers,
 not for production use.
 
