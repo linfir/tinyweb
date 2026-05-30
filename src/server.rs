@@ -94,7 +94,8 @@ impl HeaderValue {
 /// A regular HTTP response.
 pub struct Response {
     status_code: StatusCode,
-    headers: Vec<(String, String)>,
+    content_type: Option<HeaderValue>,
+    headers: Vec<(HeaderName, HeaderValue)>,
     body: Vec<u8>,
 }
 
@@ -175,32 +176,42 @@ impl Response {
     pub fn new() -> Self {
         Response {
             status_code: StatusCode::Ok,
+            content_type: None,
             headers: Vec::new(),
             body: Vec::new(),
         }
     }
 
-    /// Returns the response with the status code replaced.
+    /// Returns the response with the status code updated.
     pub fn with_status(mut self, status_code: StatusCode) -> Self {
         self.status_code = status_code;
         self
     }
 
-    /// Returns the response with the given body and a `Content-Type` header.
+    /// Returns the response with the given body and content type.
     pub fn with_body(mut self, content_type: ContentType, body: impl Into<Vec<u8>>) -> Self {
-        self.headers.push((
-            HeaderName::CONTENT_TYPE.as_str().to_string(),
-            content_type.as_str().to_string(),
-        ));
+        self.content_type = Some(HeaderValue(content_type.as_str().to_string()));
         self.body = body.into();
         self
     }
 
     /// Returns the response with an additional HTTP header.
     pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
-        self.headers
-            .push((name.as_str().to_string(), value.as_str().to_string()));
+        self.add_header(name, value);
         self
+    }
+
+    fn add_header(&mut self, name: HeaderName, value: HeaderValue) {
+        if name.as_str().eq_ignore_ascii_case("content-length")
+            || name.as_str().eq_ignore_ascii_case("connection")
+        {
+            return;
+        }
+        if name.as_str().eq_ignore_ascii_case("content-type") {
+            self.content_type = Some(value);
+            return;
+        }
+        self.headers.push((name, value));
     }
 }
 
@@ -312,12 +323,8 @@ fn handle_stream<F, R>(
     }
 
     match req_handler(&req).into().0 {
-        AnyResponseImpl::Regular(Response {
-            status_code,
-            headers,
-            body,
-        }) => {
-            if let Err(e) = send_response(stream, status_code, &headers, &body) {
+        AnyResponseImpl::Regular(resp) => {
+            if let Err(e) = send_response(stream, resp) {
                 log::error!("Failed to send response: {}", e);
             }
         }
@@ -538,37 +545,32 @@ fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
     )
 }
 
-fn send_response(
-    stream: TcpStream,
-    status_code: StatusCode,
-    headers: &[(String, String)],
-    body: &[u8],
-) -> std::io::Result<()> {
+fn send_response(stream: TcpStream, resp: Response) -> std::io::Result<()> {
     let mut w = io::BufWriter::new(stream);
 
     write!(
         w,
         "HTTP/1.1 {} {}\r\n",
-        status_code.as_u16(),
-        status_code.as_str()
+        resp.status_code.as_u16(),
+        resp.status_code.as_str()
     )?;
 
-    for (name, value) in headers {
-        write!(w, "{}: {}\r\n", name, value)?;
+    if let Some(ct) = &resp.content_type {
+        write!(w, "Content-Type: {}\r\n", ct.as_str())?;
     }
-    write!(w, "Content-Length: {}\r\n", body.len())?;
+    for (name, value) in &resp.headers {
+        write!(w, "{}: {}\r\n", name.as_str(), value.as_str())?;
+    }
+    write!(w, "Content-Length: {}\r\n", resp.body.len())?;
     write!(w, "Connection: close\r\n")?;
-
     write!(w, "\r\n")?;
 
-    w.write_all(body)?;
-    w.flush()?;
-
-    Ok(())
+    w.write_all(&resp.body)?;
+    w.flush()
 }
 
 fn send_error(stream: TcpStream, status_code: StatusCode) {
-    let _ = send_response(stream, status_code, &[], b"");
+    let _ = send_response(stream, Response::error(status_code));
 }
 
 fn next_line<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
