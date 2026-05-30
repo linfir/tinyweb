@@ -78,10 +78,10 @@ pub struct Request {
 pub struct HeaderValue(String);
 
 impl HeaderValue {
-    /// Returns `Err` if `value` contains CR (`\r`) or LF (`\n`).
+    /// Returns `Err` if `value` contains CR (`\r`), LF (`\n`), or NUL (`\0`).
     pub fn new(value: &str) -> Result<Self, &'static str> {
-        if value.contains(['\r', '\n']) {
-            return Err("header value must not contain CR or LF");
+        if value.contains(['\r', '\n', '\0']) {
+            return Err("header value must not contain CR, LF, or NUL");
         }
         Ok(HeaderValue(value.to_string()))
     }
