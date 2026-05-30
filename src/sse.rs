@@ -3,6 +3,29 @@ use std::{
     net::TcpStream,
 };
 
+/// A Server-Sent Events response.
+pub struct SseResponse(pub(crate) Box<dyn FnOnce(&mut SseWriter) + Send + 'static>);
+
+impl SseResponse {
+    /// `handler` is called synchronously on the connection thread; the connection closes when it returns.
+    pub fn new<F>(handler: F) -> Self
+    where
+        F: FnOnce(&mut SseWriter) + Send + 'static,
+    {
+        SseResponse(Box::new(handler))
+    }
+}
+
+pub(crate) fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\n\
+          Content-Type: text/event-stream\r\n\
+          Cache-Control: no-cache\r\n\
+          Connection: close\r\n\
+          \r\n",
+    )
+}
+
 pub struct SseWriter {
     inner: BufWriter<TcpStream>,
 }

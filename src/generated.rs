@@ -34,7 +34,7 @@ pub(crate) enum ContentTypeInner {
 }
 
 impl ContentTypeInner {
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Plain => "text/plain; charset=utf-8",
             Self::Html => "text/html; charset=utf-8",
@@ -285,7 +285,7 @@ pub(crate) enum HeaderNameInner {
 }
 
 impl HeaderNameInner {
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::ContentType => "Content-Type",
             Self::Location => "Location",

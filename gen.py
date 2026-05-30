@@ -50,7 +50,7 @@ def gen_mimes():
     print("Default, Custom(String) }\n")
 
     print("impl ContentTypeInner {")
-    print("pub fn as_str(&self) -> &str {")
+    print("pub(crate) fn as_str(&self) -> &str {")
     print("match self {")
     for ext, mime, variant in data:
         print(f'Self::{variant} => "{mime}",')
@@ -126,7 +126,7 @@ def gen_header_names():
     print("}\n")
 
     print("impl HeaderNameInner {")
-    print("pub fn as_str(&self) -> &str {")
+    print("pub(crate) fn as_str(&self) -> &str {")
     print("match self {")
     for text, variant, constant in data:
         print(f'Self::{variant} => "{text}",')
