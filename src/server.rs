@@ -1,10 +1,6 @@
 use std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    thread,
+    sync::Arc,
     time::Duration,
 };
 
@@ -12,16 +8,15 @@ use crate::{
     request::Request,
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
+    threadpool::ThreadPool,
     types::StatusCode,
 };
 
 /// Configuration for [`serve`].
 pub struct Config {
-    /// Maximum number of concurrent connections.
-    /// Excess connections receive a 503 response.
-    /// Setting this to 0 rejects all connections.
-    /// Default: 100.
-    pub max_connections: usize,
+    /// Number of threads in the pool.
+    /// Default: `(cpus * 4).clamp(8, 16)`.
+    pub pool_size: usize,
     /// Timeout for reading the request headers and body.
     /// Default: 5 seconds.
     pub read_timeout: Duration,
@@ -37,20 +32,16 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            max_connections: 100,
+            pool_size: {
+                let cpus = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4);
+                (2 * cpus).clamp(8, 16)
+            },
             read_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
             max_body_size: 64 * 1024,
         }
-    }
-}
-
-/// Ensures the decrement happens even if the handler panics.
-struct ActiveGuard(Arc<AtomicUsize>);
-
-impl Drop for ActiveGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -76,8 +67,8 @@ impl From<SseResponse> for AnyResponse {
 
 /// Binds to `addr` and starts handling incoming connections.
 ///
-/// Each request is dispatched to `handler` on its own thread.
-/// Limits are controlled by `config`; use [`Config::default`] for sensible defaults.
+/// Requests are dispatched to a thread pool.
+/// Pool size and timeouts are controlled by `config`; use [`Config::default`] for sensible defaults.
 pub fn serve<A, F, R>(addr: A, config: Config, handler: F) -> !
 where
     A: ToSocketAddrs,
@@ -86,21 +77,14 @@ where
 {
     let listener = TcpListener::bind(addr).expect("Cannot start server");
     let handler = Arc::new(handler);
-    let active = Arc::new(AtomicUsize::new(0));
     let config = Arc::new(config);
+    let pool = ThreadPool::new(config.pool_size);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if active.fetch_add(1, Ordering::Relaxed) >= config.max_connections {
-                    active.fetch_sub(1, Ordering::Relaxed);
-                    send_error(stream, StatusCode::ServiceUnavailable);
-                    continue;
-                }
                 let handler = handler.clone();
-                let active = active.clone();
                 let config = config.clone();
-                thread::spawn(move || {
-                    let _guard = ActiveGuard(active);
+                pool.execute(move || {
                     handle_stream(stream, handler, &config);
                 });
             }

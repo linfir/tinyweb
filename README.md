@@ -1,13 +1,13 @@
 # tinyweb
 
-A minimal, synchronous HTTP/1.1 server library
-intended for local development servers,
-not for production use.
+A minimal, synchronous HTTP/1.1 server library.
+Intended for local development servers;
+probably fine behind a robust reverse proxy in production.
 
 ## Features
 
 - Only depends on the [`log`](https://crates.io/crates/log) crate
-- Thread-per-connection model, no async runtime needed
+- Thread pool model, no async runtime needed
 - Built-in path traversal and injection protection
 - Automatic MIME type detection
 - Server-Sent Events (SSE) support
@@ -80,21 +80,12 @@ fn main() {
 }
 ```
 
-## Dependencies
-
-| Crate | Description |
-|-------|-------------|
-| [`log`](https://crates.io/crates/log) | Logging facade — diagnostics are emitted via `log::warn!` / `log::error!`. Wire up any compatible logger (e.g. [`env_logger`](https://crates.io/crates/env_logger)) to see them. |
-
 ## Limits
 
 - HTTP/1.1 only
 - 8 KB request buffer (for the request head)
-- Maximum 100 concurrent connections by default;
-  excess receives HTTP 503
-  (configurable via [`Config`])
-- 5-second read and write timeouts by default
-  (configurable via [`Config`])
+- Thread pool sized to the number of CPUs by default (configurable via [`Config`])
+- 5-second read and write timeouts by default (configurable via [`Config`])
 
 ## License
 

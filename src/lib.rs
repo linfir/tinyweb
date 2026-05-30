@@ -7,6 +7,7 @@ mod request;
 mod response;
 mod server;
 mod sse;
+mod threadpool;
 mod types;
 
 pub use crate::{
