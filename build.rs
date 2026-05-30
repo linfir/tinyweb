@@ -33,34 +33,53 @@ fn parse_mime(src: &str) -> Vec<Mime<'_>> {
 
 fn generate_mime(types: &[Mime], dst: &mut String) {
     dst.push('\n');
-    dst.push_str("/// A content type (MIME type) for HTTP responses.\n");
-    dst.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
-    dst.push_str("pub enum ContentType {\n");
+    dst.push_str("#[derive(Debug, Clone)]\n");
+    dst.push_str("enum ContentTypeInner {\n");
     for t in types {
         let _ = writeln!(dst, "\t{},", t.variant);
     }
-    dst.push_str("\tDefault,\n}\n\n");
+    dst.push_str("\tDefault,\n");
+    dst.push_str("\tCustom(String),\n}\n\n");
 
-    dst.push_str("impl ContentType {\n");
-    dst.push_str(
-        "\t/// Returns the content type for the given file extension (without leading dot).\n",
-    );
-    dst.push_str("\tpub fn from_extension(ext: Option<&str>) -> Self {\n");
-    dst.push_str("\t\tmatch ext {\n");
-    for t in types {
-        let _ = writeln!(dst, "\t\t\tSome(\"{}\") => Self::{},", t.ext, t.variant);
-    }
-    dst.push_str("\t\t\t_ => Self::Default,\n");
-    dst.push_str("\t\t}\n\t}\n\n");
-
-    dst.push_str("\t/// Returns the MIME type string (e.g. `\"text/html\"`).\n");
-    dst.push_str("\tpub fn as_str(self) -> &'static str {\n");
+    dst.push_str("impl ContentTypeInner {\n");
+    dst.push_str("\tfn as_str(&self) -> &str {\n");
     dst.push_str("\t\tmatch self {\n");
     for t in types {
         let _ = writeln!(dst, "\t\t\tSelf::{} => \"{}\",", t.variant, t.mime);
     }
     dst.push_str("\t\t\tSelf::Default => \"application/octet-stream\",\n");
-    dst.push_str("\t\t}\n\t}\n}\n");
+    dst.push_str("\t\t\tSelf::Custom(s) => s.as_str(),\n");
+    dst.push_str("\t\t}\n\t}\n}\n\n");
+
+    dst.push_str("impl ContentType {\n");
+    dst.push_str(
+        "\t/// Returns the content type for the given file extension (without leading dot),\n",
+    );
+    dst.push_str("\t/// or `None` if the extension is not recognised.\n");
+    dst.push_str("\tpub fn from_extension(ext: Option<&str>) -> Option<Self> {\n");
+    dst.push_str("\t\tmatch ext {\n");
+    for t in types {
+        let _ = writeln!(
+            dst,
+            "\t\t\tSome(\"{}\") => Some(Self(ContentTypeInner::{})),",
+            t.ext, t.variant
+        );
+    }
+    dst.push_str("\t\t\t_ => None,\n");
+    dst.push_str("\t\t}\n\t}\n\n");
+
+    for t in types {
+        let constant = t.variant.to_ascii_uppercase();
+        let _ = writeln!(dst, "\t/// The `{}` content type.", t.mime);
+        let _ = writeln!(
+            dst,
+            "\tpub const {}: Self = ContentType(ContentTypeInner::{});",
+            constant, t.variant
+        );
+    }
+    dst.push_str("\t/// The default (`application/octet-stream`) content type.\n");
+    dst.push_str("\tpub const DEFAULT: Self = ContentType(ContentTypeInner::Default);\n");
+    dst.push_str("}\n");
 }
 
 // ----------------------------------------------------------------------------

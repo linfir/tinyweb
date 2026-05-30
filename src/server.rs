@@ -190,7 +190,7 @@ impl Response {
 
     /// Returns the response with the given body and content type.
     pub fn with_body(mut self, content_type: ContentType, body: impl Into<Vec<u8>>) -> Self {
-        self.content_type = Some(HeaderValue(content_type.as_str().to_string()));
+        self.content_type = Some(HeaderValue(content_type.into_string()));
         self.body = body.into();
         self
     }
@@ -237,10 +237,10 @@ impl Response {
     /// If the extension is unknown, `application/octet-stream` is used
     /// and a warning is logged.
     pub fn file(ext: Option<&str>, body: impl Into<Vec<u8>>) -> Self {
-        let mime = ContentType::from_extension(ext);
-        if mime == ContentType::Default {
+        let mime = ContentType::from_extension(ext).unwrap_or_else(|| {
             log::warn!("Unknown file extension: {:?}", ext);
-        }
+            ContentType::DEFAULT
+        });
         Self::new().with_body(mime, body)
     }
 

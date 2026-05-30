@@ -19,7 +19,7 @@ use tinyweb::{Config, ContentType, Method, Request, Response};
 fn main() {
     tinyweb::serve("127.0.0.1:8080", Config::default(), |req: &Request| {
         match (req.method, req.path.as_str()) {
-            (Method::GET, "/") => Response::ok(ContentType::Html, "<h1>Hello!</h1>"),
+            (Method::GET, "/") => Response::ok(ContentType::HTML, "<h1>Hello!</h1>"),
             _ => Response::not_found(),
         }
     });
@@ -68,10 +68,10 @@ fn main() {
             return Response::not_found();
         };
         match (req.method, *matched.value) {
-            (Method::GET, "index") => Response::ok(ContentType::Html, "<h1>Hello!</h1>"),
+            (Method::GET, "index") => Response::ok(ContentType::HTML, "<h1>Hello!</h1>"),
             (Method::GET, "user") => {
                 let id = matched.params.get("id").unwrap_or("unknown");
-                Response::ok(ContentType::Html, format!("<h1>User {id}</h1>"))
+                Response::ok(ContentType::HTML, format!("<h1>User {id}</h1>"))
             }
             _ => Response::not_found(),
         }

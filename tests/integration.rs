@@ -50,7 +50,7 @@ fn test_post_form_body_parsed() {
                 let name = req.form.get("name").cloned().unwrap_or_default();
                 let msg = req.form.get("msg").cloned().unwrap_or_default();
                 *captured2.lock().unwrap() = Some((name, msg));
-                Response::ok(tinyweb::ContentType::Plain, "ok")
+                Response::ok(tinyweb::ContentType::PLAIN, "ok")
             } else {
                 Response::not_found()
             }
@@ -76,7 +76,7 @@ fn test_post_form_body_parsed() {
 #[test]
 fn test_post_body_exceeds_limit_returns_413() {
     let port = start_server(
-        |_req| Response::ok(tinyweb::ContentType::Plain, "ok"),
+        |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
         Config {
             max_body_size: 10,
             ..Config::default()
@@ -102,7 +102,7 @@ fn test_post_non_form_content_type() {
         move |req| {
             *captured_body2.lock().unwrap() = req.body.clone();
             assert!(req.form.is_empty());
-            Response::ok(tinyweb::ContentType::Plain, "ok")
+            Response::ok(tinyweb::ContentType::PLAIN, "ok")
         },
         Config::default(),
     );
@@ -125,7 +125,7 @@ fn test_get_request_body_and_form_empty() {
         |req| {
             assert!(req.body.is_empty());
             assert!(req.form.is_empty());
-            Response::ok(tinyweb::ContentType::Plain, "ok")
+            Response::ok(tinyweb::ContentType::PLAIN, "ok")
         },
         Config::default(),
     );
@@ -140,7 +140,7 @@ fn test_post_zero_content_length() {
         |req| {
             assert!(req.body.is_empty());
             assert!(req.form.is_empty());
-            Response::ok(tinyweb::ContentType::Plain, "ok")
+            Response::ok(tinyweb::ContentType::PLAIN, "ok")
         },
         Config::default(),
     );
@@ -160,7 +160,7 @@ fn test_post_percent_encoded_form_values() {
         move |req| {
             let city = req.form.get("city").cloned().unwrap_or_default();
             *captured2.lock().unwrap() = city;
-            Response::ok(tinyweb::ContentType::Plain, "ok")
+            Response::ok(tinyweb::ContentType::PLAIN, "ok")
         },
         Config::default(),
     );
