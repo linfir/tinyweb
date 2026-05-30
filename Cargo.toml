@@ -11,3 +11,6 @@ readme = "README.md"
 
 [dependencies]
 log = "0.4.4"
+
+[dev-dependencies]
+matchit = "0.9.2"

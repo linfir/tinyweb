@@ -49,6 +49,36 @@ fn main() {
 }
 ```
 
+## Routing
+
+For path patterns beyond simple string matching (e.g. `/users/:id`),
+[`matchit`](https://crates.io/crates/matchit) pairs well with tinyweb:
+
+```rust,no_run
+use matchit::Router;
+use tinyweb::{Config, ContentType, Method, Request, Response};
+
+fn main() {
+    let mut router = Router::new();
+    router.insert("/", "index").unwrap();
+    router.insert("/users/:id", "user").unwrap();
+
+    tinyweb::serve("127.0.0.1:8080", Config::default(), move |req: &Request| {
+        let Ok(matched) = router.at(req.path.as_str()) else {
+            return Response::not_found();
+        };
+        match (req.method, *matched.value) {
+            (Method::GET, "index") => Response::ok(ContentType::Html, "<h1>Hello!</h1>"),
+            (Method::GET, "user") => {
+                let id = matched.params.get("id").unwrap_or("unknown");
+                Response::ok(ContentType::Html, format!("<h1>User {id}</h1>"))
+            }
+            _ => Response::not_found(),
+        }
+    });
+}
+```
+
 ## Limits
 
 - HTTP/1.1 only; request body is not read
