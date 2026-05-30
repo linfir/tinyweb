@@ -19,9 +19,18 @@ pub struct HeaderName(HeaderNameInner);
 impl HeaderName {
     /// Returns a custom header name.
     ///
-    /// Returns `Err` if `name` contains `\r`, `\n`, or `:`.
+    /// Returns `Err` if `name` is empty or contains a character outside the
+    /// RFC 7230 `tchar` set (`A–Z`, `a–z`, `0–9`, `!#$%&'*+-.^_\`|~`).
     pub fn custom(name: &str) -> Result<Self, &'static str> {
-        if name.contains(['\r', '\n', ':']) {
+        if name.is_empty()
+            || !name.bytes().all(|b| {
+                matches!(b,
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+                    | b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*'
+                    | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+                )
+            })
+        {
             return Err("header name contains invalid characters");
         }
         Ok(HeaderName(HeaderNameInner::Custom(name.to_string())))
