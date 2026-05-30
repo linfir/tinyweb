@@ -3,7 +3,6 @@
 
 mod enc;
 mod generated;
-mod log;
 mod request;
 mod response;
 mod server;

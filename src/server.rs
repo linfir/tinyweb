@@ -9,7 +9,6 @@ use std::{
 };
 
 use crate::{
-    log,
     request::Request,
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},

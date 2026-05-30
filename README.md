@@ -1,11 +1,12 @@
 # tinyweb
 
-A minimal, synchronous HTTP/1.1 server library with no dependencies by default
+A minimal, synchronous HTTP/1.1 server library
 intended for local development servers,
 not for production use.
 
 ## Features
 
+- Only depends on the [`log`](https://crates.io/crates/log) crate
 - Thread-per-connection model, no async runtime needed
 - Built-in path traversal and injection protection
 - Automatic MIME type detection
@@ -79,6 +80,12 @@ fn main() {
 }
 ```
 
+## Dependencies
+
+| Crate | Description |
+|-------|-------------|
+| [`log`](https://crates.io/crates/log) | Logging facade — diagnostics are emitted via `log::warn!` / `log::error!`. Wire up any compatible logger (e.g. [`env_logger`](https://crates.io/crates/env_logger)) to see them. |
+
 ## Limits
 
 - HTTP/1.1 only
@@ -88,13 +95,6 @@ fn main() {
   (configurable via [`Config`])
 - 5-second read and write timeouts by default
   (configurable via [`Config`])
-
-## Feature flags
-
-| Flag  | Default | Description |
-|-------|---------|-------------|
-| `log` | off     | Emit diagnostics via the [`log`](https://crates.io/crates/log) crate instead of `eprintln!` |
-
 
 ## License
 

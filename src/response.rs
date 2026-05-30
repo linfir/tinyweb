@@ -5,7 +5,6 @@ use std::{
 
 use crate::{
     generated::{ContentType, HeaderName, StatusCode},
-    log,
     types::HeaderValue,
 };
 
@@ -78,7 +77,7 @@ impl Response {
     ///
     /// `ext` should be the file extension without a leading dot (e.g. `"html"`).
     /// If the extension is unknown, `application/octet-stream` is used
-    /// and a warning is logged.
+    /// and a `log::warn!` diagnostic is emitted.
     pub fn file(ext: Option<&str>, body: impl Into<Vec<u8>>) -> Self {
         let mime = ContentType::from_extension(ext).unwrap_or_else(|| {
             log::warn!("Unknown file extension: {:?}", ext);
