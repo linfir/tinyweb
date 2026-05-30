@@ -16,8 +16,12 @@ impl SseWriter {
 
     /// Sends an unnamed event.
     pub fn send(&mut self, data: &str) -> io::Result<()> {
-        for line in data.lines() {
-            writeln!(self.inner, "data:{}", line)?;
+        if data.is_empty() {
+            writeln!(self.inner, "data:")?;
+        } else {
+            for line in data.lines() {
+                writeln!(self.inner, "data:{}", line)?;
+            }
         }
         writeln!(self.inner)?;
         self.inner.flush()
