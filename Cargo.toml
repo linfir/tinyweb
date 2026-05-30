@@ -9,8 +9,11 @@ categories = ["web-programming::http-server", "network-programming"]
 repository = "https://github.com/linfir/tinyweb"
 readme = "README.md"
 
+[features]
+log = ["dep:log"]
+
 [dependencies]
-log = "0.4.4"
+log = { version = "0.4.4", optional = true }
 
 [dev-dependencies]
 matchit = "0.9.2"

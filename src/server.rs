@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{ContentType, HeaderName, Method, StatusCode, enc, sse::SseWriter};
+use crate::{ContentType, HeaderName, Method, StatusCode, enc, log, sse::SseWriter};
 
 /// Configuration for [`serve`].
 pub struct Config {

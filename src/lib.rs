@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod enc;
+mod log;
 mod server;
 mod sse;
 

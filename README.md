@@ -1,6 +1,6 @@
 # tinyweb
 
-A minimal, zero-dependency (except the `log` crate), synchronous HTTP/1.1 server library
+A minimal, zero-dependency, synchronous HTTP/1.1 server library
 intended for local development servers,
 not for production use.
 
@@ -81,13 +81,20 @@ fn main() {
 
 ## Limits
 
-- HTTP/1.1 only; request body is not read
-- 8 KB request buffer (headers only)
+- HTTP/1.1 only
+- 8 KB request buffer (for the request head)
 - Maximum 100 concurrent connections by default;
   excess receives HTTP 503
   (configurable via [`Config`])
 - 5-second read and write timeouts by default
   (configurable via [`Config`])
+
+## Feature flags
+
+| Flag  | Default | Description |
+|-------|---------|-------------|
+| `log` | off     | Emit diagnostics via the [`log`](https://crates.io/crates/log) crate instead of `eprintln!` |
+
 
 ## License
 
