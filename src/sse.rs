@@ -26,6 +26,7 @@ pub(crate) fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
     )
 }
 
+/// Writes Server-Sent Events to an open connection.
 pub struct SseWriter {
     inner: BufWriter<TcpStream>,
 }
