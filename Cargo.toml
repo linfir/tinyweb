@@ -1,6 +1,6 @@
 [package]
 name = "tinyweb"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "Minimal synchronous HTTP/1.1 server with SSE support"
 license = "MIT"
