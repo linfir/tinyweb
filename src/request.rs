@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io::Read, net::TcpStream, time::Instant};
+use std::{
+    collections::HashMap,
+    io::Read,
+    net::{SocketAddr, TcpStream},
+    time::Instant,
+};
 
 use crate::{
     enc,
@@ -26,15 +31,26 @@ pub struct Request {
     /// Keys and values are percent-decoded; `+` is treated as a space.
     /// Only populated when `Content-Type: application/x-www-form-urlencoded`.
     pub form: HashMap<String, Vec<String>>,
+    /// The TCP peer address (i.e. the reverse proxy's address, not the client's).
+    /// For the real client IP, read the `x-forwarded-for` or `x-real-ip` header.
+    pub peer_addr: SocketAddr,
 }
 
 impl Request {
-    pub(crate) fn read(stream: &TcpStream, cfg: &Config) -> Result<Self, StatusCode> {
-        read_request(stream, cfg)
+    pub(crate) fn read(
+        stream: &TcpStream,
+        cfg: &Config,
+        peer_addr: SocketAddr,
+    ) -> Result<Self, StatusCode> {
+        read_request(stream, cfg, peer_addr)
     }
 }
 
-fn read_request(stream: &TcpStream, cfg: &Config) -> Result<Request, StatusCode> {
+fn read_request(
+    stream: &TcpStream,
+    cfg: &Config,
+    peer_addr: SocketAddr,
+) -> Result<Request, StatusCode> {
     let deadline = Instant::now() + cfg.read_timeout;
     let mut buf = [0; 8 * 1024];
 
@@ -42,7 +58,7 @@ fn read_request(stream: &TcpStream, cfg: &Config) -> Result<Request, StatusCode>
         return Err(StatusCode::BadRequest);
     };
 
-    let Some(mut req) = parse_request(head) else {
+    let Some(mut req) = parse_request(head, peer_addr) else {
         return Err(StatusCode::BadRequest);
     };
 
@@ -146,7 +162,7 @@ fn read_request_body(
 
 // Parse the request line and headers from `buf`.
 // The body is not read and `Request::body` is empty.
-fn parse_request(mut buf: &[u8]) -> Option<Request> {
+fn parse_request(mut buf: &[u8], peer_addr: SocketAddr) -> Option<Request> {
     let first = next_line(&mut buf)?;
     let req_line = RequestLine::parse(first)?;
 
@@ -176,6 +192,7 @@ fn parse_request(mut buf: &[u8]) -> Option<Request> {
         headers,
         body: Vec::new(),
         form: HashMap::new(),
+        peer_addr,
     })
 }
 
@@ -441,7 +458,8 @@ fn test_parse_urlencoded_empty_input() {
 #[test]
 fn test_parse_request_post_no_body() {
     let raw = b"POST /submit HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    let req = parse_request(raw).unwrap();
+    let peer_addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+    let req = parse_request(raw, peer_addr).unwrap();
     assert_eq!(req.method, Method::POST);
     assert!(req.body.is_empty());
     assert!(req.form.is_empty());

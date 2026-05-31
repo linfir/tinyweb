@@ -101,7 +101,10 @@ where
     F: Fn(&Request) -> R + Send + Sync + 'static,
     R: Into<AnyResponse>,
 {
-    let req = match Request::read(&stream, cfg) {
+    let Ok(peer_addr) = stream.peer_addr() else {
+        return;
+    };
+    let req = match Request::read(&stream, cfg, peer_addr) {
         Ok(r) => r,
         Err(status) => {
             send_error(stream, status);
