@@ -18,16 +18,20 @@ pub struct Config {
     /// Number of threads in the pool.
     /// Default: `(cpus * 4).clamp(8, 16)`.
     pub pool_size: usize,
+    /// Maximum size of the request line + headers in bytes.
+    /// Requests exceeding this limit receive a 400 response.
+    /// Default: 8192 (8 KB).
+    pub max_header_size: usize,
+    /// Maximum request body size in bytes.
+    /// Bodies larger than this limit receive a 413 response.
+    /// Default: 65536 (64 KB).
+    pub max_body_size: usize,
     /// Timeout for reading the request headers and body.
     /// Default: 5 seconds.
     pub read_timeout: Duration,
     /// Timeout for writing the response.
     /// Default: 5 seconds.
     pub write_timeout: Duration,
-    /// Maximum request body size in bytes.
-    /// Bodies larger than this limit receive a 413 response.
-    /// Default: 65536 (64 KB).
-    pub max_body_size: usize,
 }
 
 impl Default for Config {
@@ -42,6 +46,7 @@ impl Default for Config {
             read_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
             max_body_size: 64 * 1024,
+            max_header_size: 8 * 1024,
         }
     }
 }

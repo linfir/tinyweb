@@ -52,7 +52,7 @@ fn read_request(
     peer_addr: SocketAddr,
 ) -> Result<Request, StatusCode> {
     let deadline = Instant::now() + cfg.read_timeout;
-    let mut buf = [0; 8 * 1024];
+    let mut buf = vec![0u8; cfg.max_header_size];
 
     let Some((head, body_start)) = read_request_head(stream, deadline, &mut buf) else {
         return Err(StatusCode::BadRequest);

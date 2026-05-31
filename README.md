@@ -83,7 +83,7 @@ fn main() {
 ## Limits
 
 - HTTP/1.1 only
-- 8 KB request buffer (for the request head)
+- 8 KB request header buffer by default (configurable via [`Config`])
 - Thread pool sized to the number of CPUs by default (configurable via [`Config`])
 - 5-second read and write timeouts by default (configurable via [`Config`])
 
