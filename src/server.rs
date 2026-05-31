@@ -19,11 +19,11 @@ pub struct Config {
     /// Default: `(cpus * 4).clamp(8, 16)`.
     pub pool_size: usize,
     /// Maximum size of the request line + headers in bytes.
-    /// Requests exceeding this limit receive a 400 response.
+    /// Requests exceeding this limit receive a [`StatusCode::BadRequest`] response.
     /// Default: 8192 (8 KB).
     pub max_header_size: usize,
     /// Maximum request body size in bytes.
-    /// Bodies larger than this limit receive a 413 response.
+    /// Bodies larger than this limit receive a [`StatusCode::ContentTooLarge`] response.
     /// Default: 65536 (64 KB).
     pub max_body_size: usize,
     /// Timeout for reading the request headers and body.

@@ -25,7 +25,7 @@ pub struct Request {
     /// Keys are lowercased (e.g. `"content-type"`).
     pub headers: HashMap<String, String>,
     /// Raw request body bytes.
-    /// Requests exceeding [`Config::max_body_size`] are rejected with 413.
+    /// Requests exceeding [`Config::max_body_size`] are rejected with [`StatusCode::ContentTooLarge`].
     pub body: Vec<u8>,
     /// Parsed `application/x-www-form-urlencoded` form fields.
     /// Keys and values are percent-decoded; `+` is treated as a space.
