@@ -75,12 +75,11 @@ fn test_post_form_body_parsed() {
 
 #[test]
 fn test_post_body_exceeds_limit_returns_413() {
+    let mut config = Config::default();
+    config.max_body_size = 10;
     let port = start_server(
         |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
-        Config {
-            max_body_size: 10,
-            ..Config::default()
-        },
+        config,
     );
 
     let body = b"name=toolongvalue";

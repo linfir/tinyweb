@@ -13,6 +13,7 @@ use crate::{
 };
 
 /// Configuration for [`serve`].
+#[non_exhaustive]
 pub struct Config {
     /// Number of threads in the pool.
     /// Default: `(cpus * 4).clamp(8, 16)`.
