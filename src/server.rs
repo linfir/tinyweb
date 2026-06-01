@@ -114,94 +114,118 @@ where
     let Ok(peer_addr) = stream.peer_addr() else {
         return;
     };
-    let start = Instant::now();
-    let req = match Request::read(&stream, cfg, peer_addr) {
-        Ok(r) => r,
-        Err(status) => {
-            send_error(stream, status);
-            if cfg.access_log {
-                log::info!(
-                    "{} - - {} {}ms",
-                    peer_addr,
-                    status.as_u16(),
-                    start.elapsed().as_millis()
-                );
-            }
-            return;
-        }
-    };
 
-    if !cfg.write_timeout.is_zero() {
-        stream.set_write_timeout(Some(cfg.write_timeout)).unwrap();
-    }
-
-    let response =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));
-    let any_response = match response {
-        Ok(r) => r,
-        Err(_) => {
-            let status = StatusCode::InternalServerError;
-            log::error!("handler panicked");
-            if cfg.access_log {
-                log::info!(
-                    "{} {} {} {} {}ms",
-                    peer_addr,
-                    req.method.as_str(),
-                    req.path,
-                    status.as_u16(),
-                    start.elapsed().as_millis()
-                );
-            }
-            send_error(stream, status);
-            return;
-        }
-    };
-    match any_response.0 {
-        AnyResponseImpl::Regular(resp) => {
-            let status = resp.status_code();
-            if let Err(e) = resp.send(stream) {
-                log::error!("Failed to send response: {}", e);
-            }
-            if cfg.access_log {
-                log::info!(
-                    "{} {} {} {} {}ms",
-                    peer_addr,
-                    req.method.as_str(),
-                    req.path,
-                    status.as_u16(),
-                    start.elapsed().as_millis()
-                );
-            }
-        }
-        AnyResponseImpl::Sse(SseResponse(sse_handler)) => {
-            if let Err(e) = send_sse_headers(&mut stream) {
-                log::error!("Failed to send SSE headers: {}", e);
+    let mut first = true;
+    loop {
+        let start = Instant::now();
+        let req = match Request::read(&stream, cfg, peer_addr) {
+            Ok(r) => r,
+            Err(status) => {
+                if first {
+                    if cfg.access_log {
+                        log::info!(
+                            "{} - - {} {}ms",
+                            peer_addr,
+                            status.as_u16(),
+                            start.elapsed().as_millis()
+                        );
+                    }
+                    send_error(&mut stream, status);
+                }
                 return;
             }
-            if cfg.access_log {
-                log::info!(
-                    "{} {} {} {} SSE open",
-                    peer_addr,
-                    req.method.as_str(),
-                    req.path,
-                    StatusCode::Ok.as_u16()
-                );
+        };
+        first = false;
+
+        let keep_alive = !req
+            .headers
+            .get("connection")
+            .map(|v| v.eq_ignore_ascii_case("close"))
+            .unwrap_or(false);
+
+        if !cfg.write_timeout.is_zero() {
+            stream.set_write_timeout(Some(cfg.write_timeout)).unwrap();
+        }
+
+        let response =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));
+        let any_response = match response {
+            Ok(r) => r,
+            Err(_) => {
+                let status = StatusCode::InternalServerError;
+                log::error!("handler panicked");
+                if cfg.access_log {
+                    log::info!(
+                        "{} {} {} {} {}ms",
+                        peer_addr,
+                        req.method.as_str(),
+                        req.path,
+                        status.as_u16(),
+                        start.elapsed().as_millis()
+                    );
+                }
+                send_error(&mut stream, status);
+                return;
             }
-            let mut writer = SseWriter::new(stream);
-            sse_handler(&mut writer);
-            if cfg.access_log {
-                log::info!(
-                    "{} {} {} SSE closed {}ms",
-                    peer_addr,
-                    req.method.as_str(),
-                    req.path,
-                    start.elapsed().as_millis()
-                );
+        };
+
+        match any_response.0 {
+            AnyResponseImpl::Regular(resp) => {
+                let status = resp.status_code();
+                if let Err(e) = resp.send(&mut stream, keep_alive) {
+                    log::error!("Failed to send response: {}", e);
+                    return;
+                }
+                if cfg.access_log {
+                    log::info!(
+                        "{} {} {} {} {}ms",
+                        peer_addr,
+                        req.method.as_str(),
+                        req.path,
+                        status.as_u16(),
+                        start.elapsed().as_millis()
+                    );
+                }
+                if !keep_alive {
+                    return;
+                }
+            }
+            AnyResponseImpl::Sse(SseResponse(sse_handler)) => {
+                if let Err(e) = send_sse_headers(&mut stream) {
+                    log::error!("Failed to send SSE headers: {}", e);
+                    return;
+                }
+                if cfg.access_log {
+                    log::info!(
+                        "{} {} {} {} SSE open",
+                        peer_addr,
+                        req.method.as_str(),
+                        req.path,
+                        StatusCode::Ok.as_u16()
+                    );
+                }
+                match stream.try_clone() {
+                    Ok(clone) => {
+                        let mut writer = SseWriter::new(clone);
+                        sse_handler(&mut writer);
+                    }
+                    Err(e) => log::error!("Failed to start SSE: {}", e),
+                }
+                if cfg.access_log {
+                    log::info!(
+                        "{} {} {} SSE closed {}ms",
+                        peer_addr,
+                        req.method.as_str(),
+                        req.path,
+                        start.elapsed().as_millis()
+                    );
+                }
+                return;
             }
         }
     }
 }
 
-fn send_error(stream: TcpStream, status_code: StatusCode) {
-    let _ = Response::error(status_code).send(stream);
+fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
+    let _ = Response::error(status_code).send(stream, false);
 }

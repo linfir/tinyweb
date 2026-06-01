@@ -101,8 +101,8 @@ impl Response {
     }
 
     /// Send the response over the given TCP stream.
-    pub(crate) fn send(&self, stream: TcpStream) -> std::io::Result<()> {
-        let mut w = io::BufWriter::new(stream);
+    pub(crate) fn send(&self, stream: &mut TcpStream, keep_alive: bool) -> std::io::Result<()> {
+        let mut w = io::BufWriter::new(&mut *stream);
 
         write!(
             w,
@@ -118,7 +118,11 @@ impl Response {
             write!(w, "{}: {}\r\n", name.as_str(), value.as_str())?;
         }
         write!(w, "Content-Length: {}\r\n", self.body.len())?;
-        write!(w, "Connection: close\r\n")?;
+        if keep_alive {
+            write!(w, "Connection: keep-alive\r\n")?;
+        } else {
+            write!(w, "Connection: close\r\n")?;
+        }
         write!(w, "\r\n")?;
 
         w.write_all(&self.body)?;
