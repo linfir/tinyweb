@@ -11,6 +11,13 @@ use crate::{
     server::Config,
 };
 
+pub(crate) enum RequestReadError {
+    /// EOF or timeout: the connection closed cleanly, no error response needed.
+    Closed,
+    /// Protocol error: send this status code and close.
+    Protocol(StatusCode),
+}
+
 /// An incoming HTTP request.
 #[non_exhaustive]
 pub struct Request {
@@ -41,7 +48,7 @@ impl Request {
         stream: &TcpStream,
         cfg: &Config,
         peer_addr: SocketAddr,
-    ) -> Result<Self, StatusCode> {
+    ) -> Result<Self, RequestReadError> {
         read_request(stream, cfg, peer_addr)
     }
 }
@@ -50,36 +57,34 @@ fn read_request(
     mut stream: &TcpStream,
     cfg: &Config,
     peer_addr: SocketAddr,
-) -> Result<Request, StatusCode> {
+) -> Result<Request, RequestReadError> {
     let deadline = cfg
         .read_timeout
         .filter(|d| !d.is_zero())
         .map(|d| Instant::now() + d);
     let mut buf = vec![0u8; cfg.max_header_size];
 
-    let Some((head, body_start)) = read_request_head(stream, deadline, &mut buf) else {
-        return Err(StatusCode::BadRequest);
-    };
+    let (head, body_start) = read_request_head(stream, deadline, &mut buf)?;
 
     let Some(mut req) = parse_request(head, peer_addr) else {
-        return Err(StatusCode::BadRequest);
+        return Err(RequestReadError::Protocol(StatusCode::BadRequest));
     };
 
     if req.headers.contains_key("transfer-encoding") {
-        return Err(StatusCode::NotImplemented);
+        return Err(RequestReadError::Protocol(StatusCode::NotImplemented));
     }
 
     let content_length: usize = match req.headers.get("content-length") {
         None => 0,
         Some(v) => match v.parse() {
             Ok(n) => n,
-            Err(_) => return Err(StatusCode::BadRequest),
+            Err(_) => return Err(RequestReadError::Protocol(StatusCode::BadRequest)),
         },
     };
 
     if content_length > 0 {
         if content_length > cfg.max_body_size {
-            return Err(StatusCode::ContentTooLarge);
+            return Err(RequestReadError::Protocol(StatusCode::ContentTooLarge));
         }
 
         if req
@@ -89,13 +94,10 @@ fn read_request(
             .unwrap_or(false)
             && stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err()
         {
-            return Err(StatusCode::BadRequest);
+            return Err(RequestReadError::Closed);
         }
 
-        match read_request_body(stream, deadline, body_start, content_length) {
-            Some(body) => req.body = body,
-            None => return Err(StatusCode::BadRequest),
-        };
+        req.body = read_request_body(stream, deadline, body_start, content_length)?;
 
         let is_form = req
             .headers
@@ -106,7 +108,7 @@ fn read_request(
         if is_form {
             match parse_urlencoded(&req.body, true) {
                 Some(map) => req.form = map,
-                None => return Err(StatusCode::BadRequest),
+                None => return Err(RequestReadError::Protocol(StatusCode::BadRequest)),
             }
         }
     }
@@ -117,18 +119,18 @@ fn read_request_head<'a>(
     mut stream: &TcpStream,
     deadline: Option<Instant>,
     buf: &'a mut [u8],
-) -> Option<(&'a [u8], &'a [u8])> {
+) -> Result<(&'a [u8], &'a [u8]), RequestReadError> {
     let sep = b"\r\n\r\n";
     let mut end = 0;
 
     loop {
         let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
         if timeout.map(|t| t.is_zero()).unwrap_or(false) {
-            break;
+            return Err(RequestReadError::Closed);
         }
         stream.set_read_timeout(timeout).unwrap();
         match stream.read(&mut buf[end..]) {
-            Ok(0) => break,
+            Ok(0) => return Err(RequestReadError::Closed),
             Ok(n) => {
                 let search_from = end.saturating_sub(sep.len() - 1);
                 end += n;
@@ -137,16 +139,17 @@ fn read_request_head<'a>(
                     .position(|w| w == sep)
                 {
                     let pos = search_from + p;
-                    return Some((&buf[..pos + sep.len()], &buf[pos + sep.len()..end]));
+                    return Ok((&buf[..pos + sep.len()], &buf[pos + sep.len()..end]));
                 }
                 if end == buf.len() {
-                    break;
+                    return Err(RequestReadError::Protocol(
+                        StatusCode::RequestHeaderFieldsTooLarge,
+                    ));
                 }
             }
-            Err(_) => break,
+            Err(_) => return Err(RequestReadError::Closed),
         }
     }
-    None
 }
 
 fn read_request_body(
@@ -154,23 +157,23 @@ fn read_request_body(
     deadline: Option<Instant>,
     body_start: &[u8],
     content_length: usize,
-) -> Option<Vec<u8>> {
+) -> Result<Vec<u8>, RequestReadError> {
     let mut body = vec![0u8; content_length];
     let mut pos = body_start.len().min(content_length);
     body[..pos].copy_from_slice(&body_start[..pos]);
     while pos < content_length {
         let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
         if timeout.map(|t| t.is_zero()).unwrap_or(false) {
-            return None;
+            return Err(RequestReadError::Closed);
         }
         stream.set_read_timeout(timeout).unwrap();
         match stream.read(&mut body[pos..]) {
-            Ok(0) => return None,
+            Ok(0) => return Err(RequestReadError::Closed),
             Ok(n) => pos += n,
-            Err(_) => return None,
+            Err(_) => return Err(RequestReadError::Closed),
         }
     }
-    Some(body)
+    Ok(body)
 }
 
 // Parse the request line and headers from `buf`.

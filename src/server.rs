@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    request::Request,
+    request::{Request, RequestReadError},
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
     threadpool::ThreadPool,
@@ -123,27 +123,24 @@ where
         return;
     };
 
-    let mut first = true;
     loop {
         let start = Instant::now();
         let req = match Request::read(&stream, cfg, peer_addr) {
             Ok(r) => r,
-            Err(status) => {
-                if first {
-                    if cfg.access_log {
-                        log::info!(
-                            "{} - - {} {}ms",
-                            peer_addr,
-                            status.as_u16(),
-                            start.elapsed().as_millis()
-                        );
-                    }
-                    send_error(&mut stream, status);
+            Err(RequestReadError::Closed) => return,
+            Err(RequestReadError::Protocol(status)) => {
+                if cfg.access_log {
+                    log::info!(
+                        "{} - - {} {}ms",
+                        peer_addr,
+                        status.as_u16(),
+                        start.elapsed().as_millis()
+                    );
                 }
+                send_error(&mut stream, status);
                 return;
             }
         };
-        first = false;
 
         let keep_alive = !req
             .headers
