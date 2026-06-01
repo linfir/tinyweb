@@ -17,13 +17,13 @@ impl SseResponse {
 }
 
 pub(crate) fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
-    stream.write_all(
-        b"HTTP/1.1 200 OK\r\n\
-          Content-Type: text/event-stream\r\n\
-          Cache-Control: no-cache\r\n\
-          Connection: close\r\n\
-          \r\n",
-    )
+    let mut w = io::BufWriter::new(stream);
+    write!(w, "HTTP/1.1 200 OK\r\n")?;
+    write!(w, "Content-Type: text/event-stream\r\n")?;
+    write!(w, "Cache-Control: no-cache\r\n")?;
+    write!(w, "Connection: close\r\n")?;
+    write!(w, "\r\n")?;
+    w.flush()
 }
 
 /// Writes Server-Sent Events to an open connection.
