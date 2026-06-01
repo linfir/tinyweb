@@ -30,7 +30,9 @@ impl ThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        self.sender.send(job).unwrap();
+        if self.sender.send(job).is_err() {
+            log::error!("thread pool is gone, dropping job");
+        }
     }
 }
 
