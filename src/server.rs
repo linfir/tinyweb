@@ -135,7 +135,28 @@ where
         stream.set_write_timeout(Some(cfg.write_timeout)).unwrap();
     }
 
-    match req_handler(&req).into().0 {
+    let response =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));
+    let any_response = match response {
+        Ok(r) => r,
+        Err(_) => {
+            let status = StatusCode::InternalServerError;
+            log::error!("handler panicked");
+            if cfg.access_log {
+                log::info!(
+                    "{} {} {} {} {}ms",
+                    peer_addr,
+                    req.method.as_str(),
+                    req.path,
+                    status.as_u16(),
+                    start.elapsed().as_millis()
+                );
+            }
+            send_error(stream, status);
+            return;
+        }
+    };
+    match any_response.0 {
         AnyResponseImpl::Regular(resp) => {
             let status = resp.status_code();
             if let Err(e) = resp.send(stream) {
@@ -159,10 +180,11 @@ where
             }
             if cfg.access_log {
                 log::info!(
-                    "{} {} {} 200 SSE open",
+                    "{} {} {} {} SSE open",
                     peer_addr,
                     req.method.as_str(),
-                    req.path
+                    req.path,
+                    StatusCode::Ok.as_u16()
                 );
             }
             let mut writer = SseWriter::new(stream);

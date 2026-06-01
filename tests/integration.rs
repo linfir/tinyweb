@@ -175,3 +175,15 @@ fn test_post_percent_encoded_form_values() {
     assert!(status_line(&resp).contains("200"), "response: {}", resp);
     assert_eq!(*captured.lock().unwrap(), ["San Francisco"]);
 }
+
+#[test]
+fn test_handler_panic_returns_500() {
+    let port = start_server(|_req| panic!("test panic"), Config::default());
+
+    let resp = raw_request(port, b"GET /panic HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(status_line(&resp).contains("500"), "response: {}", resp);
+
+    // worker must still be alive — next request succeeds
+    let resp = raw_request(port, b"GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(status_line(&resp).contains("500"), "response: {}", resp);
+}
