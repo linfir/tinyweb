@@ -40,19 +40,19 @@ def gen_methods():
 def gen_mimes():
     data = []
     for line in slurp("mime.txt"):
-        parts = line.split()
-        data.append((parts[0], " ".join(parts[1:-1]), parts[-1]))
+        p = line.split()
+        data.append((p[0].split(","), " ".join(p[1:-1]), p[-1]))
 
     print("#[derive(Clone)]")
     print("pub(crate) enum ContentTypeInner {")
-    for ext, mime, variant in data:
+    for exts, mime, variant in data:
         print(f"{variant},")
     print("Default, Custom(String) }\n")
 
     print("impl ContentTypeInner {")
     print("pub(crate) fn as_str(&self) -> &str {")
     print("match self {")
-    for ext, mime, variant in data:
+    for exts, mime, variant in data:
         print(f'Self::{variant} => "{mime}",')
     print('Self::Default => "application/octet-stream",')
     print("Self::Custom(s) => s.as_str(),")
@@ -66,12 +66,14 @@ def gen_mimes():
     print("/// Returns the content type for the given file extension (without leading dot),")
     print("/// or `None` if the extension is not recognised.")
     print("pub fn from_extension(ext: Option<&str>) -> Option<Self> {")
-    print("match ext {")
-    for ext, mime, variant in data:
-        print(f'Some("{ext}") => Some(Self::{variant.upper()}),')
+    print("let ext = ext?.to_ascii_lowercase();")
+    print("match ext.as_str() {")
+    for exts, mime, variant in data:
+        for ext in exts:
+            print(f'"{ext}" => Some(Self::{variant.upper()}),')
     print("_ => None,")
     print("}}\n")
-    for ext, mime, variant in data:
+    for exts, mime, variant in data:
         print(f"/// The `{mime}` content type.")
         print(f"pub const {variant.upper()}: Self = ContentType(ContentTypeInner::{variant});")
     print("/// The default (`application/octet-stream`) content type.")

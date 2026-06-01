@@ -16,7 +16,6 @@ pub(crate) enum ContentTypeInner {
     Ttf,
     Otf,
     Png,
-    Jpg,
     Jpeg,
     Webp,
     Gif,
@@ -48,7 +47,6 @@ impl ContentTypeInner {
             Self::Ttf => "font/ttf",
             Self::Otf => "font/otf",
             Self::Png => "image/png",
-            Self::Jpg => "image/jpeg",
             Self::Jpeg => "image/jpeg",
             Self::Webp => "image/webp",
             Self::Gif => "image/gif",
@@ -75,32 +73,33 @@ impl ContentType {
     /// Returns the content type for the given file extension (without leading dot),
     /// or `None` if the extension is not recognised.
     pub fn from_extension(ext: Option<&str>) -> Option<Self> {
-        match ext {
-            Some("txt") => Some(Self::PLAIN),
-            Some("html") => Some(Self::HTML),
-            Some("css") => Some(Self::CSS),
-            Some("js") => Some(Self::JS),
-            Some("svg") => Some(Self::SVG),
-            Some("tex") => Some(Self::LATEX),
-            Some("pdf") => Some(Self::PDF),
-            Some("woff") => Some(Self::WOFF),
-            Some("woff2") => Some(Self::WOFF2),
-            Some("ttf") => Some(Self::TTF),
-            Some("otf") => Some(Self::OTF),
-            Some("png") => Some(Self::PNG),
-            Some("jpg") => Some(Self::JPG),
-            Some("jpeg") => Some(Self::JPEG),
-            Some("webp") => Some(Self::WEBP),
-            Some("gif") => Some(Self::GIF),
-            Some("ico") => Some(Self::ICO),
-            Some("json") => Some(Self::JSON),
-            Some("xml") => Some(Self::XML),
-            Some("map") => Some(Self::MAP),
-            Some("wasm") => Some(Self::WASM),
-            Some("mp4") => Some(Self::MP4),
-            Some("webm") => Some(Self::WEBM),
-            Some("mp3") => Some(Self::MP3),
-            Some("ogg") => Some(Self::OGG),
+        let ext = ext?.to_ascii_lowercase();
+        match ext.as_str() {
+            "txt" => Some(Self::PLAIN),
+            "html" => Some(Self::HTML),
+            "css" => Some(Self::CSS),
+            "js" => Some(Self::JS),
+            "svg" => Some(Self::SVG),
+            "tex" => Some(Self::LATEX),
+            "pdf" => Some(Self::PDF),
+            "woff" => Some(Self::WOFF),
+            "woff2" => Some(Self::WOFF2),
+            "ttf" => Some(Self::TTF),
+            "otf" => Some(Self::OTF),
+            "png" => Some(Self::PNG),
+            "jpg" => Some(Self::JPEG),
+            "jpeg" => Some(Self::JPEG),
+            "webp" => Some(Self::WEBP),
+            "gif" => Some(Self::GIF),
+            "ico" => Some(Self::ICO),
+            "json" => Some(Self::JSON),
+            "xml" => Some(Self::XML),
+            "map" => Some(Self::MAP),
+            "wasm" => Some(Self::WASM),
+            "mp4" => Some(Self::MP4),
+            "webm" => Some(Self::WEBM),
+            "mp3" => Some(Self::MP3),
+            "ogg" => Some(Self::OGG),
             _ => None,
         }
     }
@@ -129,8 +128,6 @@ impl ContentType {
     pub const OTF: Self = ContentType(ContentTypeInner::Otf);
     /// The `image/png` content type.
     pub const PNG: Self = ContentType(ContentTypeInner::Png);
-    /// The `image/jpeg` content type.
-    pub const JPG: Self = ContentType(ContentTypeInner::Jpg);
     /// The `image/jpeg` content type.
     pub const JPEG: Self = ContentType(ContentTypeInner::Jpeg);
     /// The `image/webp` content type.
