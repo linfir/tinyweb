@@ -206,24 +206,80 @@ impl Method {
 pub enum StatusCode {
     /// HTTP/1.1 200 OK
     Ok,
+    /// HTTP/1.1 201 Created
+    Created,
+    /// HTTP/1.1 202 Accepted
+    Accepted,
+    /// HTTP/1.1 204 No Content
+    NoContent,
+    /// HTTP/1.1 206 Partial Content
+    PartialContent,
+    /// HTTP/1.1 301 Moved Permanently
+    MovedPermanently,
+    /// HTTP/1.1 302 Found
+    Found,
+    /// HTTP/1.1 303 See Other
+    SeeOther,
+    /// HTTP/1.1 304 Not Modified
+    NotModified,
     /// HTTP/1.1 307 Temporary Redirect
     TemporaryRedirect,
+    /// HTTP/1.1 308 Permanent Redirect
+    PermanentRedirect,
     /// HTTP/1.1 400 Bad Request
     BadRequest,
+    /// HTTP/1.1 401 Unauthorized
+    Unauthorized,
     /// HTTP/1.1 403 Forbidden
     Forbidden,
     /// HTTP/1.1 404 Not Found
     NotFound,
     /// HTTP/1.1 405 Method Not Allowed
     MethodNotAllowed,
+    /// HTTP/1.1 406 Not Acceptable
+    NotAcceptable,
     /// HTTP/1.1 408 Request Timeout
     RequestTimeout,
+    /// HTTP/1.1 409 Conflict
+    Conflict,
+    /// HTTP/1.1 410 Gone
+    Gone,
+    /// HTTP/1.1 411 Length Required
+    LengthRequired,
+    /// HTTP/1.1 412 Precondition Failed
+    PreconditionFailed,
     /// HTTP/1.1 413 Content Too Large
     ContentTooLarge,
+    /// HTTP/1.1 414 URI Too Long
+    URITooLong,
+    /// HTTP/1.1 415 Unsupported Media Type
+    UnsupportedMediaType,
+    /// HTTP/1.1 416 Range Not Satisfiable
+    RangeNotSatisfiable,
+    /// HTTP/1.1 422 Unprocessable Content
+    UnprocessableContent,
+    /// HTTP/1.1 426 Upgrade Required
+    UpgradeRequired,
+    /// HTTP/1.1 428 Precondition Required
+    PreconditionRequired,
+    /// HTTP/1.1 429 Too Many Requests
+    TooManyRequests,
+    /// HTTP/1.1 431 Request Header Fields Too Large
+    RequestHeaderFieldsTooLarge,
+    /// HTTP/1.1 451 Unavailable For Legal Reasons
+    UnavailableForLegalReasons,
+    /// HTTP/1.1 500 Internal Server Error
+    InternalServerError,
     /// HTTP/1.1 501 Not Implemented
     NotImplemented,
+    /// HTTP/1.1 502 Bad Gateway
+    BadGateway,
     /// HTTP/1.1 503 Service Unavailable
     ServiceUnavailable,
+    /// HTTP/1.1 504 Gateway Timeout
+    GatewayTimeout,
+    /// HTTP/1.1 505 HTTP Version Not Supported
+    HTTPVersionNotSupported,
 }
 
 impl StatusCode {
@@ -231,15 +287,43 @@ impl StatusCode {
     pub fn as_u16(self) -> u16 {
         match self {
             Self::Ok => 200,
+            Self::Created => 201,
+            Self::Accepted => 202,
+            Self::NoContent => 204,
+            Self::PartialContent => 206,
+            Self::MovedPermanently => 301,
+            Self::Found => 302,
+            Self::SeeOther => 303,
+            Self::NotModified => 304,
             Self::TemporaryRedirect => 307,
+            Self::PermanentRedirect => 308,
             Self::BadRequest => 400,
+            Self::Unauthorized => 401,
             Self::Forbidden => 403,
             Self::NotFound => 404,
             Self::MethodNotAllowed => 405,
+            Self::NotAcceptable => 406,
             Self::RequestTimeout => 408,
+            Self::Conflict => 409,
+            Self::Gone => 410,
+            Self::LengthRequired => 411,
+            Self::PreconditionFailed => 412,
             Self::ContentTooLarge => 413,
+            Self::URITooLong => 414,
+            Self::UnsupportedMediaType => 415,
+            Self::RangeNotSatisfiable => 416,
+            Self::UnprocessableContent => 422,
+            Self::UpgradeRequired => 426,
+            Self::PreconditionRequired => 428,
+            Self::TooManyRequests => 429,
+            Self::RequestHeaderFieldsTooLarge => 431,
+            Self::UnavailableForLegalReasons => 451,
+            Self::InternalServerError => 500,
             Self::NotImplemented => 501,
+            Self::BadGateway => 502,
             Self::ServiceUnavailable => 503,
+            Self::GatewayTimeout => 504,
+            Self::HTTPVersionNotSupported => 505,
         }
     }
 
@@ -247,15 +331,43 @@ impl StatusCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "OK",
+            Self::Created => "Created",
+            Self::Accepted => "Accepted",
+            Self::NoContent => "No Content",
+            Self::PartialContent => "Partial Content",
+            Self::MovedPermanently => "Moved Permanently",
+            Self::Found => "Found",
+            Self::SeeOther => "See Other",
+            Self::NotModified => "Not Modified",
             Self::TemporaryRedirect => "Temporary Redirect",
+            Self::PermanentRedirect => "Permanent Redirect",
             Self::BadRequest => "Bad Request",
+            Self::Unauthorized => "Unauthorized",
             Self::Forbidden => "Forbidden",
             Self::NotFound => "Not Found",
             Self::MethodNotAllowed => "Method Not Allowed",
+            Self::NotAcceptable => "Not Acceptable",
             Self::RequestTimeout => "Request Timeout",
+            Self::Conflict => "Conflict",
+            Self::Gone => "Gone",
+            Self::LengthRequired => "Length Required",
+            Self::PreconditionFailed => "Precondition Failed",
             Self::ContentTooLarge => "Content Too Large",
+            Self::URITooLong => "URI Too Long",
+            Self::UnsupportedMediaType => "Unsupported Media Type",
+            Self::RangeNotSatisfiable => "Range Not Satisfiable",
+            Self::UnprocessableContent => "Unprocessable Content",
+            Self::UpgradeRequired => "Upgrade Required",
+            Self::PreconditionRequired => "Precondition Required",
+            Self::TooManyRequests => "Too Many Requests",
+            Self::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
+            Self::UnavailableForLegalReasons => "Unavailable For Legal Reasons",
+            Self::InternalServerError => "Internal Server Error",
             Self::NotImplemented => "Not Implemented",
+            Self::BadGateway => "Bad Gateway",
             Self::ServiceUnavailable => "Service Unavailable",
+            Self::GatewayTimeout => "Gateway Timeout",
+            Self::HTTPVersionNotSupported => "HTTP Version Not Supported",
         }
     }
 }
