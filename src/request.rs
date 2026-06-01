@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::Read,
+    io::{Read, Write},
     net::{SocketAddr, TcpStream},
     time::Instant,
 };
@@ -47,7 +47,7 @@ impl Request {
 }
 
 fn read_request(
-    stream: &TcpStream,
+    mut stream: &TcpStream,
     cfg: &Config,
     peer_addr: SocketAddr,
 ) -> Result<Request, StatusCode> {
@@ -77,6 +77,16 @@ fn read_request(
     if content_length > 0 {
         if content_length > cfg.max_body_size {
             return Err(StatusCode::ContentTooLarge);
+        }
+
+        if req
+            .headers
+            .get("expect")
+            .map(|v| v.eq_ignore_ascii_case("100-continue"))
+            .unwrap_or(false)
+            && stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err()
+        {
+            return Err(StatusCode::BadRequest);
         }
 
         match read_request_body(stream, deadline, body_start, content_length) {
