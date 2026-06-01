@@ -7,10 +7,12 @@ probably fine behind a robust reverse proxy in production.
 ## Features
 
 - Only depends on the [`log`](https://crates.io/crates/log) crate
+- Built-in access logging
 - Thread pool model, no async runtime needed
 - Built-in path traversal and injection protection
 - Automatic MIME type detection
 - Server-Sent Events (SSE) support
+- HTTP/1.1 keep-alive
 
 ## Usage
 
