@@ -96,6 +96,10 @@ impl Response {
             .with_header(HeaderName::LOCATION, to)
     }
 
+    pub(crate) fn status_code(&self) -> StatusCode {
+        self.status_code
+    }
+
     /// Send the response over the given TCP stream.
     pub(crate) fn send(&self, stream: TcpStream) -> std::io::Result<()> {
         let mut w = io::BufWriter::new(stream);

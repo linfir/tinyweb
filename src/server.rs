@@ -1,7 +1,7 @@
 use std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -32,6 +32,9 @@ pub struct Config {
     /// Timeout for writing the response.
     /// Default: 5 seconds.
     pub write_timeout: Duration,
+    /// Emit a `log::info!` line for every completed request (peer IP, method, path, status, latency).
+    /// Default: `true`.
+    pub access_log: bool,
 }
 
 impl Default for Config {
@@ -47,6 +50,7 @@ impl Default for Config {
             write_timeout: Duration::from_secs(5),
             max_body_size: 64 * 1024,
             max_header_size: 8 * 1024,
+            access_log: true,
         }
     }
 }
@@ -110,10 +114,19 @@ where
     let Ok(peer_addr) = stream.peer_addr() else {
         return;
     };
+    let start = Instant::now();
     let req = match Request::read(&stream, cfg, peer_addr) {
         Ok(r) => r,
         Err(status) => {
             send_error(stream, status);
+            if cfg.access_log {
+                log::info!(
+                    "{} - - {} {}ms",
+                    peer_addr,
+                    status.as_u16(),
+                    start.elapsed().as_millis()
+                );
+            }
             return;
         }
     };
@@ -124,8 +137,19 @@ where
 
     match req_handler(&req).into().0 {
         AnyResponseImpl::Regular(resp) => {
+            let status = resp.status_code();
             if let Err(e) = resp.send(stream) {
                 log::error!("Failed to send response: {}", e);
+            }
+            if cfg.access_log {
+                log::info!(
+                    "{} {} {} {} {}ms",
+                    peer_addr,
+                    req.method.as_str(),
+                    req.path,
+                    status.as_u16(),
+                    start.elapsed().as_millis()
+                );
             }
         }
         AnyResponseImpl::Sse(SseResponse(sse_handler)) => {
@@ -133,8 +157,25 @@ where
                 log::error!("Failed to send SSE headers: {}", e);
                 return;
             }
+            if cfg.access_log {
+                log::info!(
+                    "{} {} {} 200 SSE open",
+                    peer_addr,
+                    req.method.as_str(),
+                    req.path
+                );
+            }
             let mut writer = SseWriter::new(stream);
             sse_handler(&mut writer);
+            if cfg.access_log {
+                log::info!(
+                    "{} {} {} SSE closed {}ms",
+                    peer_addr,
+                    req.method.as_str(),
+                    req.path,
+                    start.elapsed().as_millis()
+                );
+            }
         }
     }
 }
