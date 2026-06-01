@@ -1,6 +1,7 @@
 use std::{
     io::{self, Write},
     net::TcpStream,
+    time::Duration,
 };
 
 use crate::{
@@ -101,7 +102,12 @@ impl Response {
     }
 
     /// Send the response over the given TCP stream.
-    pub(crate) fn send(&self, stream: &mut TcpStream, keep_alive: bool) -> std::io::Result<()> {
+    /// `keep_alive` is `Some(timeout)` to keep the connection open, `None` to close it.
+    pub(crate) fn send(
+        &self,
+        stream: &mut TcpStream,
+        keep_alive: Option<Duration>,
+    ) -> std::io::Result<()> {
         let mut w = io::BufWriter::new(&mut *stream);
 
         write!(
@@ -118,8 +124,11 @@ impl Response {
             write!(w, "{}: {}\r\n", name.as_str(), value.as_str())?;
         }
         write!(w, "Content-Length: {}\r\n", self.body.len())?;
-        if keep_alive {
+        if let Some(timeout) = keep_alive {
             write!(w, "Connection: keep-alive\r\n")?;
+            if !timeout.is_zero() {
+                write!(w, "Keep-Alive: timeout={}\r\n", timeout.as_secs())?;
+            }
         } else {
             write!(w, "Connection: close\r\n")?;
         }

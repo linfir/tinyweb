@@ -147,6 +147,7 @@ where
             .get("connection")
             .map(|v| v.eq_ignore_ascii_case("close"))
             .unwrap_or(false);
+        let keep_alive_timeout = if keep_alive { cfg.read_timeout } else { None };
 
         // set_write_timeout rejects Some(0) on most platforms; treat it as no timeout.
         stream
@@ -178,7 +179,7 @@ where
         match any_response.0 {
             AnyResponseImpl::Regular(resp) => {
                 let status = resp.status_code();
-                if let Err(e) = resp.send(&mut stream, keep_alive) {
+                if let Err(e) = resp.send(&mut stream, keep_alive_timeout) {
                     log::error!("Failed to send response: {}", e);
                     return;
                 }
@@ -228,5 +229,5 @@ where
 }
 
 fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
-    let _ = Response::error(status_code).send(stream, false);
+    let _ = Response::error(status_code).send(stream, None);
 }
