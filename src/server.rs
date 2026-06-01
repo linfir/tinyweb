@@ -27,11 +27,13 @@ pub struct Config {
     /// Default: 65536 (64 KB).
     pub max_body_size: usize,
     /// Timeout for reading the request headers and body.
+    /// `None` means no timeout.
     /// Default: 5 seconds.
-    pub read_timeout: Duration,
+    pub read_timeout: Option<Duration>,
     /// Timeout for writing the response.
+    /// `None` means no timeout.
     /// Default: 5 seconds.
-    pub write_timeout: Duration,
+    pub write_timeout: Option<Duration>,
     /// Emit a `log::info!` line for every completed request (peer IP, method, path, status, latency).
     /// Default: `true`.
     pub access_log: bool,
@@ -46,8 +48,8 @@ impl Default for Config {
 
         Config {
             pool_size,
-            read_timeout: Duration::from_secs(5),
-            write_timeout: Duration::from_secs(5),
+            read_timeout: Some(Duration::from_secs(5)),
+            write_timeout: Some(Duration::from_secs(5)),
             max_body_size: 64 * 1024,
             max_header_size: 8 * 1024,
             access_log: true,
@@ -88,8 +90,8 @@ where
     assert!(config.pool_size > 0);
     assert!(config.max_header_size > 0);
     assert!(config.max_body_size > 0);
-    assert!(!config.read_timeout.is_zero());
-    assert!(!config.write_timeout.is_zero());
+    assert!(config.read_timeout.map(|d| !d.is_zero()).unwrap_or(true));
+    assert!(config.write_timeout.map(|d| !d.is_zero()).unwrap_or(true));
 
     let listener = TcpListener::bind(addr).expect("Cannot start server");
     let handler = Arc::new(handler);
@@ -149,9 +151,10 @@ where
             .map(|v| v.eq_ignore_ascii_case("close"))
             .unwrap_or(false);
 
-        if !cfg.write_timeout.is_zero() {
-            stream.set_write_timeout(Some(cfg.write_timeout)).unwrap();
-        }
+        // set_write_timeout rejects Some(0) on most platforms; treat it as no timeout.
+        stream
+            .set_write_timeout(cfg.write_timeout.filter(|d| !d.is_zero()))
+            .unwrap();
 
         let response =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));

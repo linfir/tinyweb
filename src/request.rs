@@ -51,7 +51,10 @@ fn read_request(
     cfg: &Config,
     peer_addr: SocketAddr,
 ) -> Result<Request, StatusCode> {
-    let deadline = Instant::now() + cfg.read_timeout;
+    let deadline = cfg
+        .read_timeout
+        .filter(|d| !d.is_zero())
+        .map(|d| Instant::now() + d);
     let mut buf = vec![0u8; cfg.max_header_size];
 
     let Some((head, body_start)) = read_request_head(stream, deadline, &mut buf) else {
@@ -112,18 +115,18 @@ fn read_request(
 
 fn read_request_head<'a>(
     mut stream: &TcpStream,
-    deadline: Instant,
+    deadline: Option<Instant>,
     buf: &'a mut [u8],
 ) -> Option<(&'a [u8], &'a [u8])> {
     let sep = b"\r\n\r\n";
     let mut end = 0;
 
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if timeout.map(|t| t.is_zero()).unwrap_or(false) {
             break;
         }
-        stream.set_read_timeout(Some(remaining)).unwrap();
+        stream.set_read_timeout(timeout).unwrap();
         match stream.read(&mut buf[end..]) {
             Ok(0) => break,
             Ok(n) => {
@@ -148,7 +151,7 @@ fn read_request_head<'a>(
 
 fn read_request_body(
     mut stream: &TcpStream,
-    deadline: Instant,
+    deadline: Option<Instant>,
     body_start: &[u8],
     content_length: usize,
 ) -> Option<Vec<u8>> {
@@ -156,11 +159,11 @@ fn read_request_body(
     let mut pos = body_start.len().min(content_length);
     body[..pos].copy_from_slice(&body_start[..pos]);
     while pos < content_length {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if timeout.map(|t| t.is_zero()).unwrap_or(false) {
             return None;
         }
-        stream.set_read_timeout(Some(remaining)).unwrap();
+        stream.set_read_timeout(timeout).unwrap();
         match stream.read(&mut body[pos..]) {
             Ok(0) => return None,
             Ok(n) => pos += n,
