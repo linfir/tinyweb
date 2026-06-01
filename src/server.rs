@@ -210,13 +210,8 @@ where
                         StatusCode::Ok.as_u16()
                     );
                 }
-                match stream.try_clone() {
-                    Ok(clone) => {
-                        let mut writer = SseWriter::new(clone);
-                        sse_handler(&mut writer);
-                    }
-                    Err(e) => log::error!("Failed to start SSE: {}", e),
-                }
+                let mut writer = SseWriter::new(stream);
+                sse_handler(&mut writer);
                 if cfg.access_log {
                     log::info!(
                         "{} {} {} SSE closed {}ms",
