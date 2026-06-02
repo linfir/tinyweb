@@ -39,13 +39,13 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let pool_size = (2 * cpus).clamp(8, 16);
+
         Config {
-            pool_size: {
-                let cpus = std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4);
-                (2 * cpus).clamp(8, 16)
-            },
+            pool_size,
             read_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
             max_body_size: 64 * 1024,
