@@ -85,6 +85,12 @@ where
     F: Fn(&Request) -> R + Send + Sync + 'static,
     R: Into<AnyResponse>,
 {
+    assert!(config.pool_size > 0);
+    assert!(config.max_header_size > 0);
+    assert!(config.max_body_size > 0);
+    assert!(!config.read_timeout.is_zero());
+    assert!(!config.write_timeout.is_zero());
+
     let listener = TcpListener::bind(addr).expect("Cannot start server");
     let handler = Arc::new(handler);
     let config = Arc::new(config);
