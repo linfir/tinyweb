@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    request::{Request, RequestReadError},
+    request::{self, Request},
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
     threadpool::ThreadPool,
@@ -27,13 +27,14 @@ pub struct Config {
     /// Default: 65536 (64 KB).
     pub max_body_size: usize,
     /// Timeout for reading the request headers and body.
-    /// `None` means no timeout.
     /// Default: 5 seconds.
-    pub read_timeout: Option<Duration>,
+    pub read_timeout: Duration,
+    /// Idle timeout between keep-alive requests.
+    /// Default: 30 seconds.
+    pub idle_timeout: Duration,
     /// Timeout for writing the response.
-    /// `None` means no timeout.
     /// Default: 5 seconds.
-    pub write_timeout: Option<Duration>,
+    pub write_timeout: Duration,
     /// Emit a `log::info!` line for every completed request (peer IP, method, path, status, latency).
     /// Default: `true`.
     pub access_log: bool,
@@ -48,8 +49,9 @@ impl Default for Config {
 
         Config {
             pool_size,
-            read_timeout: Some(Duration::from_secs(5)),
-            write_timeout: Some(Duration::from_secs(5)),
+            read_timeout: Duration::from_secs(5),
+            idle_timeout: Duration::from_secs(30),
+            write_timeout: Duration::from_secs(5),
             max_body_size: 64 * 1024,
             max_header_size: 8 * 1024,
             access_log: true,
@@ -90,8 +92,9 @@ where
     assert!(config.pool_size > 0);
     assert!(config.max_header_size > 0);
     assert!(config.max_body_size > 0);
-    assert!(config.read_timeout.map(|d| !d.is_zero()).unwrap_or(true));
-    assert!(config.write_timeout.map(|d| !d.is_zero()).unwrap_or(true));
+    assert!(!config.read_timeout.is_zero());
+    assert!(!config.idle_timeout.is_zero());
+    assert!(!config.write_timeout.is_zero());
 
     let listener = TcpListener::bind(addr).expect("Cannot start server");
     let handler = Arc::new(handler);
@@ -114,7 +117,7 @@ where
     unreachable!();
 }
 
-fn handle_stream<F, R>(mut stream: TcpStream, req_handler: Arc<F>, cfg: &Config)
+fn handle_stream<F, R>(mut stream: TcpStream, req_handler: Arc<F>, config: &Config)
 where
     F: Fn(&Request) -> R + Send + Sync + 'static,
     R: Into<AnyResponse>,
@@ -123,13 +126,14 @@ where
         return;
     };
 
+    let mut rdr = request::Reader::new(config, peer_addr);
     loop {
         let start = Instant::now();
-        let req = match Request::read(&stream, cfg, peer_addr) {
+        let req = match rdr.read(&mut stream) {
             Ok(r) => r,
-            Err(RequestReadError::Closed) => return,
-            Err(RequestReadError::Protocol(status)) => {
-                if cfg.access_log {
+            Err(request::Error::Closed) => return,
+            Err(request::Error::Protocol(status)) => {
+                if config.access_log {
                     log::info!(
                         "{} - - {} {}ms",
                         peer_addr,
@@ -147,11 +151,9 @@ where
             .get("connection")
             .map(|v| v.eq_ignore_ascii_case("close"))
             .unwrap_or(false);
-        let keep_alive_timeout = if keep_alive { cfg.read_timeout } else { None };
 
-        // set_write_timeout rejects Some(0) on most platforms; treat it as no timeout.
         stream
-            .set_write_timeout(cfg.write_timeout.filter(|d| !d.is_zero()))
+            .set_write_timeout(Some(config.write_timeout))
             .unwrap();
 
         let response =
@@ -161,7 +163,7 @@ where
             Err(_) => {
                 let status = StatusCode::InternalServerError;
                 log::error!("handler panicked");
-                if cfg.access_log {
+                if config.access_log {
                     log::info!(
                         "{} {} {} {} {}ms",
                         peer_addr,
@@ -179,11 +181,11 @@ where
         match any_response.0 {
             AnyResponseImpl::Regular(resp) => {
                 let status = resp.status_code();
-                if let Err(e) = resp.send(&mut stream, keep_alive_timeout) {
+                if let Err(e) = resp.send(&mut stream, keep_alive.then_some(config.idle_timeout)) {
                     log::error!("Failed to send response: {}", e);
                     return;
                 }
-                if cfg.access_log {
+                if config.access_log {
                     log::info!(
                         "{} {} {} {} {}ms",
                         peer_addr,
@@ -202,7 +204,8 @@ where
                     log::error!("Failed to send SSE headers: {}", e);
                     return;
                 }
-                if cfg.access_log {
+                stream.set_write_timeout(None).unwrap();
+                if config.access_log {
                     log::info!(
                         "{} {} {} {} SSE open",
                         peer_addr,
@@ -213,7 +216,7 @@ where
                 }
                 let mut writer = SseWriter::new(stream);
                 sse_handler(&mut writer);
-                if cfg.access_log {
+                if config.access_log {
                     log::info!(
                         "{} {} {} SSE closed {}ms",
                         peer_addr,

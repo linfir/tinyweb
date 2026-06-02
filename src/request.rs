@@ -11,13 +11,6 @@ use crate::{
     server::Config,
 };
 
-pub(crate) enum RequestReadError {
-    /// EOF or timeout: the connection closed cleanly, no error response needed.
-    Closed,
-    /// Protocol error: send this status code and close.
-    Protocol(StatusCode),
-}
-
 /// An incoming HTTP request.
 #[non_exhaustive]
 pub struct Request {
@@ -43,152 +36,235 @@ pub struct Request {
     pub peer_addr: SocketAddr,
 }
 
-impl Request {
-    pub(crate) fn read(
-        stream: &TcpStream,
-        cfg: &Config,
-        peer_addr: SocketAddr,
-    ) -> Result<Self, RequestReadError> {
-        read_request(stream, cfg, peer_addr)
-    }
+pub(crate) enum Error {
+    Closed,
+    Protocol(StatusCode),
 }
 
-fn read_request(
-    mut stream: &TcpStream,
-    cfg: &Config,
+type Result<T> = std::result::Result<T, Error>;
+
+pub(crate) struct Reader<'a> {
+    config: &'a Config,
+    first: bool,
     peer_addr: SocketAddr,
-) -> Result<Request, RequestReadError> {
-    let deadline = cfg
-        .read_timeout
-        .filter(|d| !d.is_zero())
-        .map(|d| Instant::now() + d);
-    let mut buf = vec![0u8; cfg.max_header_size];
+    buf: Box<[u8]>,
+    pos: usize,
+}
 
-    let (head, body_start) = read_request_head(stream, deadline, &mut buf)?;
+impl<'a> Reader<'a> {
+    pub fn new(config: &'a Config, peer_addr: SocketAddr) -> Self {
+        let buf_size = config.max_header_size.max(config.max_body_size);
 
-    let Some(mut req) = parse_request(head, peer_addr) else {
-        return Err(RequestReadError::Protocol(StatusCode::BadRequest));
-    };
-
-    if req.headers.contains_key("transfer-encoding") {
-        return Err(RequestReadError::Protocol(StatusCode::NotImplemented));
+        Reader {
+            config,
+            first: true,
+            peer_addr,
+            buf: vec![0; buf_size].into_boxed_slice(),
+            pos: 0,
+        }
     }
 
-    let content_length: usize = match req.headers.get("content-length") {
-        None => 0,
-        Some(v) => match v.parse() {
-            Ok(n) => n,
-            Err(_) => return Err(RequestReadError::Protocol(StatusCode::BadRequest)),
-        },
-    };
+    fn consume(&mut self, n: usize) {
+        assert!(n <= self.pos);
+        self.buf.copy_within(n..self.pos, 0);
+        self.pos -= n;
+    }
 
-    if content_length > 0 {
-        if content_length > cfg.max_body_size {
-            return Err(RequestReadError::Protocol(StatusCode::ContentTooLarge));
+    pub(crate) fn read(&mut self, stream: &mut TcpStream) -> Result<Request> {
+        let (idx, deadline) = self.read_head(stream)?;
+
+        let head =
+            parse_head(&self.buf[..idx + 2]).ok_or(Error::Protocol(StatusCode::BadRequest))?;
+
+        if head.headers.contains_key("transfer-encoding") {
+            return Err(Error::Protocol(StatusCode::NotImplemented));
         }
 
-        if req
-            .headers
-            .get("expect")
-            .map(|v| v.eq_ignore_ascii_case("100-continue"))
-            .unwrap_or(false)
-            && stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err()
-        {
-            return Err(RequestReadError::Closed);
+        let content_length: usize = match head.headers.get("content-length") {
+            None => 0,
+            Some(v) => match v.parse() {
+                Ok(n) => n,
+                Err(_) => return Err(Error::Protocol(StatusCode::BadRequest)),
+            },
+        };
+
+        self.consume(idx + 4);
+
+        let mut req = Request {
+            method: head.method,
+            path: head.path,
+            query: head.query,
+            headers: head.headers,
+            body: Vec::new(),
+            form: HashMap::new(),
+            peer_addr: self.peer_addr,
+        };
+
+        if content_length > 0 {
+            if content_length > self.config.max_body_size {
+                return Err(Error::Protocol(StatusCode::ContentTooLarge));
+            }
+
+            if req
+                .headers
+                .get("expect")
+                .map(|v| v.eq_ignore_ascii_case("100-continue"))
+                .unwrap_or(false)
+                && stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err()
+            {
+                return Err(Error::Closed);
+            }
+
+            self.read_body(stream, content_length, deadline)?;
+            let body = &self.buf[..content_length];
+
+            let is_form = req
+                .headers
+                .get("content-type")
+                .map(|v| v.starts_with("application/x-www-form-urlencoded"))
+                .unwrap_or(false);
+
+            if is_form {
+                match parse_urlencoded(body, true) {
+                    Some(map) => req.form = map,
+                    None => return Err(Error::Protocol(StatusCode::BadRequest)),
+                }
+            }
+
+            req.body = body.to_vec();
+
+            self.consume(content_length);
+        }
+        Ok(req)
+    }
+
+    // Returns the index of the end of the headers (the start of the body).
+    // The body will start at this index + 4 (after the \r\n\r\n).
+    // Also returns the read_timeout deadline to be shared with read_body.
+    fn read_head(&mut self, stream: &mut TcpStream) -> Result<(usize, Instant)> {
+        let max_size = self.config.max_header_size;
+        let sep = b"\r\n\r\n";
+        let buf = &mut self.buf[0..max_size];
+
+        if self.pos >= max_size {
+            return find_from(buf, sep, 0)
+                .map(|idx| (idx, Instant::now() + self.config.read_timeout))
+                .ok_or(Error::Protocol(StatusCode::RequestHeaderFieldsTooLarge));
+        } else if let Some(idx) = find_from(&buf[0..self.pos], sep, 0) {
+            return Ok((idx, Instant::now() + self.config.read_timeout));
         }
 
-        req.body = read_request_body(stream, deadline, body_start, content_length)?;
+        let mut idle = !self.first && self.pos == 0;
+        self.first = false;
+        let mut deadline = Instant::now()
+            + if idle {
+                self.config.idle_timeout
+            } else {
+                self.config.read_timeout
+            };
 
-        let is_form = req
-            .headers
-            .get("content-type")
-            .map(|v| v.starts_with("application/x-www-form-urlencoded"))
-            .unwrap_or(false);
-
-        if is_form {
-            match parse_urlencoded(&req.body, true) {
-                Some(map) => req.form = map,
-                None => return Err(RequestReadError::Protocol(StatusCode::BadRequest)),
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Protocol(StatusCode::RequestTimeout));
+            }
+            stream.set_read_timeout(Some(remaining)).unwrap();
+            match stream.read(&mut buf[self.pos..]) {
+                Ok(0) => return Err(Error::Closed),
+                Ok(n) => {
+                    if idle {
+                        deadline = Instant::now() + self.config.read_timeout;
+                        idle = false;
+                    }
+                    let search_from = self.pos;
+                    self.pos += n;
+                    if let Some(idx) = find_from(&buf[0..self.pos], sep, search_from) {
+                        return Ok((idx, deadline));
+                    }
+                    if self.pos == buf.len() {
+                        return Err(Error::Protocol(StatusCode::RequestHeaderFieldsTooLarge));
+                    }
+                }
+                Err(e) => {
+                    use std::io::ErrorKind::{TimedOut, WouldBlock};
+                    return Err(if matches!(e.kind(), TimedOut | WouldBlock) {
+                        Error::Protocol(StatusCode::RequestTimeout)
+                    } else {
+                        Error::Closed
+                    });
+                }
             }
         }
     }
-    Ok(req)
+
+    fn read_body(
+        &mut self,
+        stream: &mut TcpStream,
+        content_length: usize,
+        deadline: Instant,
+    ) -> Result<()> {
+        let max_size = self.config.max_body_size;
+        assert!(content_length <= max_size); // should be checked by caller
+
+        let buf = &mut self.buf[0..max_size];
+
+        while self.pos < content_length {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Protocol(StatusCode::RequestTimeout));
+            }
+            stream.set_read_timeout(Some(remaining)).unwrap();
+            match stream.read(&mut buf[self.pos..]) {
+                Ok(0) => return Err(Error::Closed),
+                Ok(n) => self.pos += n,
+                Err(e) => {
+                    use std::io::ErrorKind::{TimedOut, WouldBlock};
+                    return Err(if matches!(e.kind(), TimedOut | WouldBlock) {
+                        Error::Protocol(StatusCode::RequestTimeout)
+                    } else {
+                        Error::Closed
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-fn read_request_head<'a>(
-    mut stream: &TcpStream,
-    deadline: Option<Instant>,
-    buf: &'a mut [u8],
-) -> Result<(&'a [u8], &'a [u8]), RequestReadError> {
+// Search for `sep` in `data` starting from `search_from`.
+// Returns the index of the start of `sep` if found.
+// Assumes that `sep` is not present in `data[..search_from]`.
+fn find_from(data: &[u8], sep: &[u8], search_from: usize) -> Option<usize> {
+    // Sep could overlap the boundary, so go back sep.len()-1 bytes.
+    let start = search_from.saturating_sub(sep.len().saturating_sub(1));
+    data[start..]
+        .windows(sep.len())
+        .position(|w| w == sep)
+        .map(|i| start + i)
+}
+
+#[test]
+fn test_find_from() {
     let sep = b"\r\n\r\n";
-    let mut end = 0;
-
-    loop {
-        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-        if timeout.map(|t| t.is_zero()).unwrap_or(false) {
-            return Err(RequestReadError::Closed);
-        }
-        stream.set_read_timeout(timeout).unwrap();
-        match stream.read(&mut buf[end..]) {
-            Ok(0) => return Err(RequestReadError::Closed),
-            Ok(n) => {
-                let search_from = end.saturating_sub(sep.len() - 1);
-                end += n;
-                if let Some(p) = buf[search_from..end]
-                    .windows(sep.len())
-                    .position(|w| w == sep)
-                {
-                    let pos = search_from + p;
-                    return Ok((&buf[..pos + sep.len()], &buf[pos + sep.len()..end]));
-                }
-                if end == buf.len() {
-                    return Err(RequestReadError::Protocol(
-                        StatusCode::RequestHeaderFieldsTooLarge,
-                    ));
-                }
-            }
-            Err(_) => return Err(RequestReadError::Closed),
-        }
-    }
+    assert_eq!(find_from(b"hello\r\n\r\nworld", sep, 0), Some(5));
+    assert_eq!(find_from(b"\r\n\r\nhello", sep, 4), None);
+    assert_eq!(find_from(b"abc\r\n\r\n", sep, 5), Some(3)); // overlap
+    assert_eq!(find_from(b"hello world", sep, 0), None);
+    assert_eq!(find_from(b"", sep, 0), None);
 }
 
-fn read_request_body(
-    mut stream: &TcpStream,
-    deadline: Option<Instant>,
-    body_start: &[u8],
-    content_length: usize,
-) -> Result<Vec<u8>, RequestReadError> {
-    let mut body = vec![0u8; content_length];
-    let mut pos = body_start.len().min(content_length);
-    body[..pos].copy_from_slice(&body_start[..pos]);
-    while pos < content_length {
-        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-        if timeout.map(|t| t.is_zero()).unwrap_or(false) {
-            return Err(RequestReadError::Closed);
-        }
-        stream.set_read_timeout(timeout).unwrap();
-        match stream.read(&mut body[pos..]) {
-            Ok(0) => return Err(RequestReadError::Closed),
-            Ok(n) => pos += n,
-            Err(_) => return Err(RequestReadError::Closed),
-        }
-    }
-    Ok(body)
-}
+// ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 
 // Parse the request line and headers from `buf`.
 // The body is not read and `Request::body` is empty.
-fn parse_request(mut buf: &[u8], peer_addr: SocketAddr) -> Option<Request> {
+fn parse_head(mut buf: &[u8]) -> Option<Head> {
     let first = next_line(&mut buf)?;
-    let req_line = RequestLine::parse(first)?;
+    let head = Head::parse(first)?;
 
     let mut headers = HashMap::new();
-    let mut found_end = false;
     while let Some(line) = next_line(&mut buf) {
-        if line.is_empty() {
-            found_end = true;
-            break;
-        }
         let header = Header::parse(line)?;
         let entry = headers.entry(header.key).or_insert_with(String::new);
         if !entry.is_empty() {
@@ -197,28 +273,21 @@ fn parse_request(mut buf: &[u8], peer_addr: SocketAddr) -> Option<Request> {
         entry.push_str(&header.value);
     }
 
-    if !found_end || !headers.contains_key("host") {
+    if !headers.contains_key("host") {
         return None;
     }
 
-    Some(Request {
-        method: req_line.method,
-        path: req_line.path,
-        query: req_line.query_map,
-        headers,
-        body: Vec::new(),
-        form: HashMap::new(),
-        peer_addr,
-    })
+    Some(Head { headers, ..head })
 }
 
-struct RequestLine {
+struct Head {
     method: Method,
     path: String,
-    query_map: HashMap<String, Vec<String>>,
+    query: HashMap<String, Vec<String>>,
+    headers: HashMap<String, String>,
 }
 
-impl RequestLine {
+impl Head {
     fn parse(line: &[u8]) -> Option<Self> {
         let mut parts = line.splitn(3, |&b| b == b' ');
 
@@ -252,12 +321,13 @@ impl RequestLine {
             return None;
         }
 
-        let query_map = parse_urlencoded(query, false)?;
+        let query = parse_urlencoded(query, false)?;
 
-        Some(RequestLine {
+        Some(Head {
             method,
             path,
-            query_map,
+            query,
+            headers: HashMap::new(),
         })
     }
 }
@@ -334,85 +404,85 @@ fn next_line<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
 #[test]
 fn test_parse_get_no_query() {
     let line = b"GET /hello HTTP/1.1";
-    let req_line = RequestLine::parse(line).unwrap();
+    let req_line = Head::parse(line).unwrap();
     assert_eq!(req_line.method, Method::GET);
     assert_eq!(req_line.path, "/hello");
-    assert!(req_line.query_map.is_empty());
+    assert!(req_line.query.is_empty());
 }
 
 #[test]
 fn test_parse_get_with_query() {
     let line = b"GET /search?q=rust&lang=en HTTP/1.1";
-    let req_line = RequestLine::parse(line).unwrap();
+    let req_line = Head::parse(line).unwrap();
     assert_eq!(req_line.method, Method::GET);
     assert_eq!(req_line.path, "/search");
-    assert_eq!(req_line.query_map["q"], ["rust"]);
-    assert_eq!(req_line.query_map["lang"], ["en"]);
+    assert_eq!(req_line.query["q"], ["rust"]);
+    assert_eq!(req_line.query["lang"], ["en"]);
 }
 
 #[test]
 fn test_parse_repeated_query_key() {
     let line = b"GET /items?tag=a&tag=b HTTP/1.1";
-    let req_line = RequestLine::parse(line).unwrap();
-    assert_eq!(req_line.query_map["tag"], ["a", "b"]);
+    let req_line = Head::parse(line).unwrap();
+    assert_eq!(req_line.query["tag"], ["a", "b"]);
 }
 
 #[test]
 fn test_parse_post() {
     let line = b"POST /submit HTTP/1.1";
-    let req_line = RequestLine::parse(line).unwrap();
+    let req_line = Head::parse(line).unwrap();
     assert_eq!(req_line.method, Method::POST);
     assert_eq!(req_line.path, "/submit");
-    assert!(req_line.query_map.is_empty());
+    assert!(req_line.query.is_empty());
 }
 
 #[test]
 fn test_parse_invalid_method() {
     let line = b"FOO /bar HTTP/1.1";
-    assert!(RequestLine::parse(line).is_none());
+    assert!(Head::parse(line).is_none());
 }
 
 #[test]
 fn test_parse_invalid_version() {
     let line = b"GET / HTTP/1.0";
-    assert!(RequestLine::parse(line).is_none());
+    assert!(Head::parse(line).is_none());
 }
 
 #[test]
 fn test_parse_empty_query_key() {
     let line = b"GET /?=value HTTP/1.1";
-    let req_line = RequestLine::parse(line).unwrap();
-    assert!(req_line.query_map.is_empty());
+    let req_line = Head::parse(line).unwrap();
+    assert!(req_line.query.is_empty());
 }
 
 #[test]
 fn test_parse_rejects_encoded_slash() {
-    assert!(RequestLine::parse(b"GET /foo%2Fbar HTTP/1.1").is_none());
-    assert!(RequestLine::parse(b"GET /foo%2fbar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo%2Fbar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo%2fbar HTTP/1.1").is_none());
 }
 
 #[test]
 fn test_parse_rejects_encoded_backslash() {
-    assert!(RequestLine::parse(b"GET /foo%5Cbar HTTP/1.1").is_none());
-    assert!(RequestLine::parse(b"GET /foo%5cbar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo%5Cbar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo%5cbar HTTP/1.1").is_none());
 }
 
 #[test]
 fn test_parse_rejects_encoded_null() {
-    assert!(RequestLine::parse(b"GET /foo%00bar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo%00bar HTTP/1.1").is_none());
 }
 
 #[test]
 fn test_parse_rejects_dot_dot_segments() {
-    assert!(RequestLine::parse(b"GET /foo/../bar HTTP/1.1").is_none());
-    assert!(RequestLine::parse(b"GET /foo/.. HTTP/1.1").is_none());
-    assert!(RequestLine::parse(b"GET /../etc/passwd HTTP/1.1").is_none());
-    assert!(RequestLine::parse(b"GET /foo/%2e%2e/bar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo/../bar HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo/.. HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /../etc/passwd HTTP/1.1").is_none());
+    assert!(Head::parse(b"GET /foo/%2e%2e/bar HTTP/1.1").is_none());
 }
 
 #[test]
 fn test_parse_allows_triple_dot() {
-    let req_line = RequestLine::parse(b"GET /foo/.../bar HTTP/1.1").unwrap();
+    let req_line = Head::parse(b"GET /foo/.../bar HTTP/1.1").unwrap();
     assert_eq!(req_line.path, "/foo/.../bar");
 }
 
@@ -469,14 +539,4 @@ fn test_parse_urlencoded_invalid_percent() {
 fn test_parse_urlencoded_empty_input() {
     let map = parse_urlencoded(b"", false).unwrap();
     assert!(map.is_empty());
-}
-
-#[test]
-fn test_parse_request_post_no_body() {
-    let raw = b"POST /submit HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    let peer_addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-    let req = parse_request(raw, peer_addr).unwrap();
-    assert_eq!(req.method, Method::POST);
-    assert!(req.body.is_empty());
-    assert!(req.form.is_empty());
 }
