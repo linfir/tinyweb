@@ -31,6 +31,7 @@ where
 fn raw_request(port: u16, request: &[u8]) -> String {
     let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
     stream.write_all(request).unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
