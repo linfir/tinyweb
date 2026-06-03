@@ -105,9 +105,17 @@ where
             Ok(stream) => {
                 let handler = handler.clone();
                 let config = config.clone();
-                pool.execute(move || {
+                let write_timeout = config.write_timeout;
+                let stream_copy = stream.try_clone();
+                if !pool.execute(move || {
                     handle_stream(stream, handler, &config);
-                });
+                }) {
+                    log::warn!("thread pool full, rejecting connection");
+                    if let Ok(mut s) = stream_copy {
+                        let _ = s.set_write_timeout(Some(write_timeout));
+                        send_error(&mut s, StatusCode::ServiceUnavailable);
+                    }
+                }
             }
             Err(e) => {
                 log::error!("Cannot establish connection: {}", e);

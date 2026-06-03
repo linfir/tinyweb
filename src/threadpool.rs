@@ -25,13 +25,19 @@ impl ThreadPool {
     }
 
     /// Executes a job on a thread in the pool.
-    pub fn execute<F>(&self, f: F)
+    /// Returns false if the queue is full.
+    pub fn execute<F>(&self, f: F) -> bool
     where
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        if self.sender.send(job).is_err() {
-            log::error!("thread pool is gone, dropping job");
+        match self.sender.try_send(job) {
+            Ok(()) => true,
+            Err(mpsc::TrySendError::Full(_)) => false,
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                log::error!("thread pool is gone, dropping job");
+                false
+            }
         }
     }
 }
