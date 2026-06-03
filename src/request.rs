@@ -144,13 +144,12 @@ impl<'a> Reader<'a> {
     fn read_head(&mut self, stream: &mut TcpStream) -> Result<(usize, Instant)> {
         let max_size = self.config.max_header_size;
         let sep = b"\r\n\r\n";
-        let buf = &mut self.buf[0..max_size];
 
         if self.pos >= max_size {
-            return find_from(buf, sep, 0)
+            return find_from(&self.buf[..max_size], sep, 0)
                 .map(|idx| (idx, Instant::now() + self.config.read_timeout))
                 .ok_or(Error::Protocol(StatusCode::RequestHeaderFieldsTooLarge));
-        } else if let Some(idx) = find_from(&buf[0..self.pos], sep, 0) {
+        } else if let Some(idx) = find_from(&self.buf[..self.pos], sep, 0) {
             return Ok((idx, Instant::now() + self.config.read_timeout));
         }
 
@@ -169,7 +168,7 @@ impl<'a> Reader<'a> {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
             stream.set_read_timeout(Some(remaining)).unwrap();
-            match stream.read(&mut buf[self.pos..]) {
+            match stream.read(&mut self.buf[self.pos..]) {
                 Ok(0) => return Err(Error::Closed),
                 Ok(n) => {
                     if idle {
@@ -178,10 +177,12 @@ impl<'a> Reader<'a> {
                     }
                     let search_from = self.pos;
                     self.pos += n;
-                    if let Some(idx) = find_from(&buf[0..self.pos], sep, search_from) {
+                    if let Some(idx) =
+                        find_from(&self.buf[0..self.pos.min(max_size)], sep, search_from)
+                    {
                         return Ok((idx, deadline));
                     }
-                    if self.pos == buf.len() {
+                    if self.pos >= max_size {
                         return Err(Error::Protocol(StatusCode::RequestHeaderFieldsTooLarge));
                     }
                 }
@@ -206,15 +207,13 @@ impl<'a> Reader<'a> {
         let max_size = self.config.max_body_size;
         assert!(content_length <= max_size); // should be checked by caller
 
-        let buf = &mut self.buf[0..max_size];
-
         while self.pos < content_length {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
             stream.set_read_timeout(Some(remaining)).unwrap();
-            match stream.read(&mut buf[self.pos..]) {
+            match stream.read(&mut self.buf[self.pos..]) {
                 Ok(0) => return Err(Error::Closed),
                 Ok(n) => self.pos += n,
                 Err(e) => {
