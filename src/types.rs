@@ -42,7 +42,7 @@ impl HeaderName {
     /// Returns a new header name.
     ///
     /// Returns `Err` if `name` is empty or contains a character outside the
-    /// RFC 7230 `tchar` set (`A–Z`, `a–z`, `0–9`, `!#$%&'*+-.^_\`|~`).
+    /// RFC 7230 `tchar` set (`A-Z`, `a-z`, `0-9`, `!#$%&'*+-.^_\`|~`).
     pub fn new(name: &str) -> Result<Self, &'static str> {
         if name.is_empty()
             || !name.bytes().all(|b| {

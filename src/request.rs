@@ -377,7 +377,7 @@ impl Header {
     fn parse(line: &[u8]) -> Option<Self> {
         let line = std::str::from_utf8(line).ok()?;
         let (key, value) = line.split_once(':')?;
-        // RFC 7230 §3.2.4: whitespace between field name and colon MUST be rejected
+        // RFC 7230 s3.2.4: whitespace between field name and colon MUST be rejected
         if key != key.trim() {
             return None;
         }

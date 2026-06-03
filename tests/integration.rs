@@ -184,7 +184,7 @@ fn test_handler_panic_returns_500() {
     let resp = raw_request(port, b"GET /panic HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert!(status_line(&resp).contains("500"), "response: {}", resp);
 
-    // worker must still be alive — next request succeeds
+    // worker must still be alive -- next request succeeds
     let resp = raw_request(port, b"GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert!(status_line(&resp).contains("500"), "response: {}", resp);
 }
