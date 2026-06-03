@@ -36,6 +36,51 @@ pub struct Request {
     pub peer_addr: SocketAddr,
 }
 
+mod buf {
+    pub struct Buf {
+        data: Box<[u8]>,
+        pos: usize,
+    }
+
+    impl Buf {
+        pub fn new(size: usize) -> Self {
+            Buf {
+                data: vec![0; size].into_boxed_slice(),
+                pos: 0,
+            }
+        }
+
+        pub fn pos(&self) -> usize {
+            self.pos
+        }
+
+        pub fn data(&self) -> &[u8] {
+            &self.data[..self.pos]
+        }
+
+        pub fn data_up_to(&self, max: usize) -> &[u8] {
+            &self.data[..self.pos.min(max)]
+        }
+
+        pub fn consume(&mut self, n: usize) {
+            assert!(n <= self.pos);
+            self.data.copy_within(n..self.pos, 0);
+            self.pos -= n;
+        }
+
+        pub fn rest_mut(&mut self) -> &mut [u8] {
+            &mut self.data[self.pos..]
+        }
+
+        pub fn advance(&mut self, n: usize) {
+            assert!(self.pos + n <= self.data.len());
+            self.pos += n;
+        }
+    }
+}
+
+use buf::Buf;
+
 pub(crate) enum Error {
     Closed,
     Protocol(StatusCode),
@@ -47,34 +92,28 @@ pub(crate) struct Reader<'a> {
     config: &'a Config,
     first: bool,
     peer_addr: SocketAddr,
-    buf: Box<[u8]>,
-    pos: usize,
+    buf: Buf,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(config: &'a Config, peer_addr: SocketAddr) -> Self {
         let buf_size = config.max_header_size.max(config.max_body_size);
+        // FOR LATER: maybe buf_size should be bigger (and passed as a separate config)
+        // to allow reading more data while processing the request
 
         Reader {
             config,
             first: true,
             peer_addr,
-            buf: vec![0; buf_size].into_boxed_slice(),
-            pos: 0,
+            buf: Buf::new(buf_size),
         }
-    }
-
-    fn consume(&mut self, n: usize) {
-        assert!(n <= self.pos);
-        self.buf.copy_within(n..self.pos, 0);
-        self.pos -= n;
     }
 
     pub(crate) fn read(&mut self, stream: &mut TcpStream) -> Result<Request> {
         let (idx, deadline) = self.read_head(stream)?;
 
-        let head =
-            parse_head(&self.buf[..idx + 2]).ok_or(Error::Protocol(StatusCode::BadRequest))?;
+        let head = parse_head(&self.buf.data()[..idx + 2])
+            .ok_or(Error::Protocol(StatusCode::BadRequest))?;
 
         if head.headers.contains_key("transfer-encoding") {
             return Err(Error::Protocol(StatusCode::NotImplemented));
@@ -88,7 +127,7 @@ impl<'a> Reader<'a> {
             },
         };
 
-        self.consume(idx + 4);
+        self.buf.consume(idx + 4);
 
         let mut req = Request {
             method: head.method,
@@ -116,7 +155,7 @@ impl<'a> Reader<'a> {
             }
 
             self.read_body(stream, content_length, deadline)?;
-            let body = &self.buf[..content_length];
+            let body = &self.buf.data()[..content_length];
 
             let is_form = req
                 .headers
@@ -133,7 +172,7 @@ impl<'a> Reader<'a> {
 
             req.body = body.to_vec();
 
-            self.consume(content_length);
+            self.buf.consume(content_length);
         }
         Ok(req)
     }
@@ -145,15 +184,15 @@ impl<'a> Reader<'a> {
         let max_size = self.config.max_header_size;
         let sep = b"\r\n\r\n";
 
-        if self.pos >= max_size {
-            return find_from(&self.buf[..max_size], sep, 0)
+        if self.buf.pos() >= max_size {
+            return find_from(self.buf.data_up_to(max_size), sep, 0)
                 .map(|idx| (idx, Instant::now() + self.config.read_timeout))
                 .ok_or(Error::Protocol(StatusCode::RequestHeaderFieldsTooLarge));
-        } else if let Some(idx) = find_from(&self.buf[..self.pos], sep, 0) {
+        } else if let Some(idx) = find_from(self.buf.data(), sep, 0) {
             return Ok((idx, Instant::now() + self.config.read_timeout));
         }
 
-        let mut idle = !self.first && self.pos == 0;
+        let mut idle = !self.first && self.buf.pos() == 0;
         self.first = false;
         let mut deadline = Instant::now()
             + if idle {
@@ -168,21 +207,19 @@ impl<'a> Reader<'a> {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
             stream.set_read_timeout(Some(remaining)).unwrap();
-            match stream.read(&mut self.buf[self.pos..]) {
+            match stream.read(self.buf.rest_mut()) {
                 Ok(0) => return Err(Error::Closed),
                 Ok(n) => {
                     if idle {
                         deadline = Instant::now() + self.config.read_timeout;
                         idle = false;
                     }
-                    let search_from = self.pos;
-                    self.pos += n;
-                    if let Some(idx) =
-                        find_from(&self.buf[0..self.pos.min(max_size)], sep, search_from)
-                    {
+                    let search_from = self.buf.pos();
+                    self.buf.advance(n);
+                    if let Some(idx) = find_from(self.buf.data_up_to(max_size), sep, search_from) {
                         return Ok((idx, deadline));
                     }
-                    if self.pos >= max_size {
+                    if self.buf.pos() >= max_size {
                         return Err(Error::Protocol(StatusCode::RequestHeaderFieldsTooLarge));
                     }
                 }
@@ -207,15 +244,15 @@ impl<'a> Reader<'a> {
         let max_size = self.config.max_body_size;
         assert!(content_length <= max_size); // should be checked by caller
 
-        while self.pos < content_length {
+        while self.buf.pos() < content_length {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
             stream.set_read_timeout(Some(remaining)).unwrap();
-            match stream.read(&mut self.buf[self.pos..]) {
+            match stream.read(self.buf.rest_mut()) {
                 Ok(0) => return Err(Error::Closed),
-                Ok(n) => self.pos += n,
+                Ok(n) => self.buf.advance(n),
                 Err(e) => {
                     use std::io::ErrorKind::{TimedOut, WouldBlock};
                     return Err(if matches!(e.kind(), TimedOut | WouldBlock) {
