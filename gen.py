@@ -2,7 +2,7 @@
 
 
 def slurp(filename):
-    print(f"// --- {filename} " + "-" * (80 - len(filename) -8) + "\n")
+    print(f"// --- {filename} " + "-" * (80 - len(filename) - 8) + "\n")
     with open(f"data/{filename}") as f:
         for line in f:
             line = line.strip()
