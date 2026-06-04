@@ -1,7 +1,7 @@
 use std::{
     io::{self, Write},
     net::TcpStream,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
@@ -118,6 +118,7 @@ impl Response {
             self.status_code.as_str()
         )?;
 
+        write!(w, "Date: {}\r\n", http_date())?;
         if let Some(ct) = &self.content_type {
             write!(w, "Content-Type: {}\r\n", ct.as_str())?;
         }
@@ -140,6 +141,61 @@ impl Response {
         }
         w.flush()
     }
+}
+
+// Formats the current UTC time as an HTTP-date (RFC 7231 §7.1.1.1).
+pub(crate) fn http_date() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    http_date_from(secs)
+}
+
+fn http_date_from(secs: u64) -> String {
+    let days = (secs / 86400) as i64;
+    let sod = secs % 86400;
+    let (h, m, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
+    let dow = (days + 4) % 7; // epoch was a Thursday; 0 = Sunday
+    // Civil date from days (Howard Hinnant's algorithm)
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = mp + if mp < 10 { 3 } else { -9 };
+    let y = y + if mo <= 2 { 1 } else { 0 };
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    format!(
+        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
+        DAYS[dow as usize],
+        d,
+        MONTHS[(mo - 1) as usize],
+        y,
+        h,
+        m,
+        s,
+    )
+}
+
+#[test]
+fn test_http_date_from() {
+    // Epoch
+    assert_eq!(http_date_from(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+    // Last second of day 1
+    assert_eq!(http_date_from(86399), "Thu, 01 Jan 1970 23:59:59 GMT");
+    // Start of day 2
+    assert_eq!(http_date_from(86400), "Fri, 02 Jan 1970 00:00:00 GMT");
+    // Leap day in year-2000 (divisible by 400)
+    assert_eq!(http_date_from(951782400), "Tue, 29 Feb 2000 00:00:00 GMT");
+    // Jan 1, 2025, noon
+    assert_eq!(http_date_from(1735732800), "Wed, 01 Jan 2025 12:00:00 GMT");
 }
 
 impl Default for Response {
