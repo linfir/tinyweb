@@ -22,7 +22,7 @@ probably fine behind a robust reverse proxy in production.
 ## Limitations
 
 Each idle keep-alive connection holds a worker thread for the duration of `idle_timeout` (default 30 s).
-With the default pool size of 8-16 threads, a small number of idle connections can starve the server (slow loris).
+With the default pool size of 8-32 threads, a small number of idle connections can starve the server (slow loris).
 A reverse proxy such as nginx mitigates this by buffering requests and using short-lived upstream connections;
 **direct internet exposure without a reverse proxy is not recommended**.
 

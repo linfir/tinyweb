@@ -16,7 +16,7 @@ use crate::{
 #[non_exhaustive]
 pub struct Config {
     /// Number of threads in the pool.
-    /// Default: `(cpus * 4).clamp(8, 16)`.
+    /// Default: `(cpus * 2).clamp(8, 32)`.
     pub pool_size: usize,
     /// Maximum size of the request line + headers in bytes.
     /// Requests exceeding this limit receive a [`StatusCode::BadRequest`] response.
@@ -45,7 +45,7 @@ impl Default for Config {
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let pool_size = (2 * cpus).clamp(8, 16);
+        let pool_size = (cpus * 2).clamp(8, 32);
 
         Config {
             pool_size,
