@@ -3,7 +3,7 @@ use std::{
     net::TcpStream,
 };
 
-use crate::date::http_date;
+use crate::date::Date;
 
 /// A Server-Sent Events response.
 pub struct SseResponse(pub(crate) Box<dyn FnOnce(&mut SseWriter) + Send + 'static>);
@@ -21,7 +21,7 @@ impl SseResponse {
 pub(crate) fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
     let mut w = io::BufWriter::new(stream);
     write!(w, "HTTP/1.1 200 OK\r\n")?;
-    write!(w, "Date: {}\r\n", http_date())?;
+    write!(w, "Date: {}\r\n", Date::now().http())?;
     write!(w, "Content-Type: text/event-stream\r\n")?;
     write!(w, "Cache-Control: no-cache\r\n")?;
     write!(w, "Connection: close\r\n")?;

@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    date::clf_date,
+    date::Date,
     request::{self, Request},
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
@@ -176,6 +176,7 @@ where
     let mut rdr = request::Reader::new(config, peer_addr);
     loop {
         let start = Instant::now();
+        let recv_date = Date::now();
         let req = match rdr.read(&mut stream) {
             Ok(r) => r,
             Err(request::Error::Closed) => return,
@@ -184,7 +185,7 @@ where
                     log::info!(
                         "{} - - {} \"-\" {} 0 \"-\" \"-\" {}ms",
                         peer_addr,
-                        clf_date(),
+                        recv_date.clf(),
                         status.as_u16(),
                         start.elapsed().as_millis(),
                     );
@@ -226,7 +227,7 @@ where
                     log::info!(
                         "{} - - {} \"{} {} HTTP/1.1\" {} 0 \"{}\" \"{}\" {}ms",
                         peer_addr,
-                        clf_date(),
+                        recv_date.clf(),
                         req.method.as_str(),
                         safe_path,
                         status.as_u16(),
@@ -266,7 +267,7 @@ where
                     log::info!(
                         "{} - - {} \"{} {} HTTP/1.1\" {} {} \"{}\" \"{}\" {}ms",
                         peer_addr,
-                        clf_date(),
+                        recv_date.clf(),
                         req.method.as_str(),
                         safe_path,
                         status.as_u16(),
@@ -299,7 +300,7 @@ where
                     log::info!(
                         "{} - - {} \"{} {} HTTP/1.1\" {} - \"{}\" \"{}\"",
                         peer_addr,
-                        clf_date(),
+                        recv_date.clf(),
                         req.method.as_str(),
                         safe_path,
                         StatusCode::Ok.as_u16(),

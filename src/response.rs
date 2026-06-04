@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    date::http_date,
+    date::Date,
     generated::{ContentType, HeaderName, StatusCode},
     types::HeaderValue,
 };
@@ -125,7 +125,7 @@ impl Response {
             self.status_code.as_str()
         )?;
 
-        write!(w, "Date: {}\r\n", http_date())?;
+        write!(w, "Date: {}\r\n", Date::now().http())?;
         if let Some(ct) = &self.content_type {
             write!(w, "Content-Type: {}\r\n", ct.as_str())?;
         }
