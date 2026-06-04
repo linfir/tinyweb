@@ -37,7 +37,7 @@ fn main() {
             (Method::GET, "/") => Response::ok(ContentType::HTML, "<h1>Hello!</h1>"),
             _ => Response::not_found(),
         }
-    });
+    }).unwrap();
 }
 ```
 

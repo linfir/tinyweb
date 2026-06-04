@@ -6,7 +6,7 @@ fn main() {
     router.insert("/", "index").unwrap();
     router.insert("/users/:id", "user").unwrap();
 
-    tinyweb::serve("127.0.0.1:8080", Config::default(), move |req: &Request| {
+    let Err(e) = tinyweb::serve("127.0.0.1:8080", Config::default(), move |req: &Request| {
         let Ok(matched) = router.at(req.path.as_str()) else {
             return Response::not_found();
         };
@@ -19,4 +19,5 @@ fn main() {
             _ => Response::not_found(),
         }
     });
+    eprintln!("Error: {e}");
 }

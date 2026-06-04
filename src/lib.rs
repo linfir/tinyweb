@@ -13,7 +13,7 @@ mod types;
 pub use crate::{
     request::Request,
     response::Response,
-    server::{AnyResponse, Config, serve},
+    server::{AnyResponse, Config, ServeError, serve},
     sse::{SseResponse, SseWriter},
     types::*,
 };

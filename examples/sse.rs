@@ -3,7 +3,7 @@ use std::{thread, time::Duration};
 use tinyweb::{AnyResponse, Config, Method, Request, Response, SseResponse};
 
 fn main() {
-    tinyweb::serve(
+    let Err(e) = tinyweb::serve(
         "127.0.0.1:8080",
         Config::default(),
         |req: &Request| -> AnyResponse {
@@ -21,4 +21,5 @@ fn main() {
             }
         },
     );
+    eprintln!("Error: {e}");
 }
