@@ -212,7 +212,6 @@ where
                     log::error!("Failed to send SSE headers: {}", e);
                     return;
                 }
-                stream.set_write_timeout(None).unwrap();
                 if config.access_log {
                     log::info!(
                         "{} {} {} {} SSE open",
