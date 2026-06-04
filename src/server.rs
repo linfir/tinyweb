@@ -9,7 +9,7 @@ use crate::{
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
     threadpool::ThreadPool,
-    types::StatusCode,
+    types::{Method, StatusCode},
 };
 
 /// Configuration for [`serve`].
@@ -83,6 +83,8 @@ impl From<SseResponse> for AnyResponse {
 ///
 /// Requests are dispatched to a thread pool.
 /// Pool size and timeouts are controlled by `config`; use [`Config::default`] for sensible defaults.
+///
+/// For HEAD requests, the handler is called normally but the response body is not sent.
 pub fn serve<A, F, R>(addr: A, config: Config, handler: F) -> !
 where
     A: ToSocketAddrs,
@@ -189,7 +191,11 @@ where
         match any_response.0 {
             AnyResponseImpl::Regular(resp) => {
                 let status = resp.status_code();
-                if let Err(e) = resp.send(&mut stream, keep_alive.then_some(config.idle_timeout)) {
+                if let Err(e) = resp.send(
+                    &mut stream,
+                    keep_alive.then_some(config.idle_timeout),
+                    req.method != Method::HEAD,
+                ) {
                     log::error!("Failed to send response: {}", e);
                     return;
                 }
@@ -239,5 +245,5 @@ where
 }
 
 fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
-    let _ = Response::error(status_code).send(stream, None);
+    let _ = Response::error(status_code).send(stream, None, true);
 }

@@ -107,6 +107,7 @@ impl Response {
         &self,
         stream: &mut TcpStream,
         keep_alive: Option<Duration>,
+        send_body: bool,
     ) -> std::io::Result<()> {
         let mut w = io::BufWriter::new(&mut *stream);
 
@@ -134,7 +135,9 @@ impl Response {
         }
         write!(w, "\r\n")?;
 
-        w.write_all(&self.body)?;
+        if send_body {
+            w.write_all(&self.body)?;
+        }
         w.flush()
     }
 }
