@@ -3,7 +3,7 @@ use std::{
     net::TcpStream,
 };
 
-use crate::response::http_date;
+use crate::date::http_date;
 
 /// A Server-Sent Events response.
 pub struct SseResponse(pub(crate) Box<dyn FnOnce(&mut SseWriter) + Send + 'static>);

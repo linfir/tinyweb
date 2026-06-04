@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    date::clf_date,
     request::{self, Request},
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
@@ -181,10 +182,11 @@ where
             Err(request::Error::Protocol(status)) => {
                 if config.access_log {
                     log::info!(
-                        "{} - - {} {}ms",
+                        "{} - - {} \"-\" {} 0 \"-\" \"-\" {}ms",
                         peer_addr,
+                        clf_date(),
                         status.as_u16(),
-                        start.elapsed().as_millis()
+                        start.elapsed().as_millis(),
                     );
                 }
                 send_error(&mut stream, status);
@@ -211,13 +213,26 @@ where
                 let status = StatusCode::InternalServerError;
                 log::error!("handler panicked");
                 if config.access_log {
+                    let referer = req
+                        .headers
+                        .get("referer")
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let ua = req
+                        .headers
+                        .get("user-agent")
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
                     log::info!(
-                        "{} {} {} {} {}ms",
+                        "{} - - {} \"{} {} HTTP/1.1\" {} 0 \"{}\" \"{}\" {}ms",
                         peer_addr,
+                        clf_date(),
                         req.method.as_str(),
                         safe_path,
                         status.as_u16(),
-                        start.elapsed().as_millis()
+                        referer,
+                        ua,
+                        start.elapsed().as_millis(),
                     );
                 }
                 send_error(&mut stream, status);
@@ -228,6 +243,7 @@ where
         match any_response.0 {
             AnyResponseImpl::Regular(resp) => {
                 let status = resp.status_code();
+                let bytes = resp.body_len();
                 if let Err(e) = resp.send(
                     &mut stream,
                     keep_alive.then_some(config.idle_timeout),
@@ -237,13 +253,27 @@ where
                     return;
                 }
                 if config.access_log {
+                    let referer = req
+                        .headers
+                        .get("referer")
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let ua = req
+                        .headers
+                        .get("user-agent")
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
                     log::info!(
-                        "{} {} {} {} {}ms",
+                        "{} - - {} \"{} {} HTTP/1.1\" {} {} \"{}\" \"{}\" {}ms",
                         peer_addr,
+                        clf_date(),
                         req.method.as_str(),
                         safe_path,
                         status.as_u16(),
-                        start.elapsed().as_millis()
+                        bytes,
+                        referer,
+                        ua,
+                        start.elapsed().as_millis(),
                     );
                 }
                 if !keep_alive {
@@ -256,24 +286,31 @@ where
                     return;
                 }
                 if config.access_log {
+                    let referer = req
+                        .headers
+                        .get("referer")
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
+                    let ua = req
+                        .headers
+                        .get("user-agent")
+                        .map(|s| s.as_str())
+                        .unwrap_or("-");
                     log::info!(
-                        "{} {} {} {} SSE open",
+                        "{} - - {} \"{} {} HTTP/1.1\" {} - \"{}\" \"{}\"",
                         peer_addr,
+                        clf_date(),
                         req.method.as_str(),
                         safe_path,
-                        StatusCode::Ok.as_u16()
+                        StatusCode::Ok.as_u16(),
+                        referer,
+                        ua,
                     );
                 }
                 let mut writer = SseWriter::new(stream);
                 sse_handler(&mut writer);
                 if config.access_log {
-                    log::info!(
-                        "{} {} {} SSE closed {}ms",
-                        peer_addr,
-                        req.method.as_str(),
-                        safe_path,
-                        start.elapsed().as_millis()
-                    );
+                    log::info!("{} SSE closed {}ms", peer_addr, start.elapsed().as_millis(),);
                 }
                 return;
             }
