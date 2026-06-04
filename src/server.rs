@@ -182,12 +182,15 @@ where
             Err(request::Error::Closed) => return,
             Err(request::Error::Protocol(status)) => {
                 if config.access_log {
-                    log::info!(
-                        "{} - - {} \"-\" {} 0 \"-\" \"-\" {}ms",
+                    log_clf(
                         peer_addr,
-                        recv_date.clf(),
+                        &recv_date,
+                        "-",
                         status.as_u16(),
-                        start.elapsed().as_millis(),
+                        0,
+                        "-",
+                        "-",
+                        Some(start.elapsed().as_millis()),
                     );
                 }
                 send_error(&mut stream, status);
@@ -214,26 +217,17 @@ where
                 let status = StatusCode::InternalServerError;
                 log::error!("handler panicked");
                 if config.access_log {
-                    let referer = req
-                        .headers
-                        .get("referer")
-                        .map(|s| s.as_str())
-                        .unwrap_or("-");
-                    let ua = req
-                        .headers
-                        .get("user-agent")
-                        .map(|s| s.as_str())
-                        .unwrap_or("-");
-                    log::info!(
-                        "{} - - {} \"{} {} HTTP/1.1\" {} 0 \"{}\" \"{}\" {}ms",
+                    let (referer, ua) = clf_headers(&req);
+                    let req_line = clf_request_line(req.method.as_str(), &safe_path);
+                    log_clf(
                         peer_addr,
-                        recv_date.clf(),
-                        req.method.as_str(),
-                        safe_path,
+                        &recv_date,
+                        &req_line,
                         status.as_u16(),
+                        0,
                         referer,
                         ua,
-                        start.elapsed().as_millis(),
+                        Some(start.elapsed().as_millis()),
                     );
                 }
                 send_error(&mut stream, status);
@@ -254,27 +248,17 @@ where
                     return;
                 }
                 if config.access_log {
-                    let referer = req
-                        .headers
-                        .get("referer")
-                        .map(|s| s.as_str())
-                        .unwrap_or("-");
-                    let ua = req
-                        .headers
-                        .get("user-agent")
-                        .map(|s| s.as_str())
-                        .unwrap_or("-");
-                    log::info!(
-                        "{} - - {} \"{} {} HTTP/1.1\" {} {} \"{}\" \"{}\" {}ms",
+                    let (referer, ua) = clf_headers(&req);
+                    let req_line = clf_request_line(req.method.as_str(), &safe_path);
+                    log_clf(
                         peer_addr,
-                        recv_date.clf(),
-                        req.method.as_str(),
-                        safe_path,
+                        &recv_date,
+                        &req_line,
                         status.as_u16(),
                         bytes,
                         referer,
                         ua,
-                        start.elapsed().as_millis(),
+                        Some(start.elapsed().as_millis()),
                     );
                 }
                 if !keep_alive {
@@ -287,25 +271,17 @@ where
                     return;
                 }
                 if config.access_log {
-                    let referer = req
-                        .headers
-                        .get("referer")
-                        .map(|s| s.as_str())
-                        .unwrap_or("-");
-                    let ua = req
-                        .headers
-                        .get("user-agent")
-                        .map(|s| s.as_str())
-                        .unwrap_or("-");
-                    log::info!(
-                        "{} - - {} \"{} {} HTTP/1.1\" {} - \"{}\" \"{}\"",
+                    let (referer, ua) = clf_headers(&req);
+                    let req_line = clf_request_line(req.method.as_str(), &safe_path);
+                    log_clf(
                         peer_addr,
-                        recv_date.clf(),
-                        req.method.as_str(),
-                        safe_path,
+                        &recv_date,
+                        &req_line,
                         StatusCode::Ok.as_u16(),
+                        "-",
                         referer,
                         ua,
+                        None,
                     );
                 }
                 let mut writer = SseWriter::new(stream);
@@ -322,6 +298,60 @@ where
                 return;
             }
         }
+    }
+}
+
+fn clf_headers(req: &Request) -> (&str, &str) {
+    let referer = req
+        .headers
+        .get("referer")
+        .map(|s| s.as_str())
+        .unwrap_or("-");
+    let ua = req
+        .headers
+        .get("user-agent")
+        .map(|s| s.as_str())
+        .unwrap_or("-");
+    (referer, ua)
+}
+
+fn clf_request_line(method: &str, path: &str) -> String {
+    format!("{method} {path} HTTP/1.1")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_clf(
+    peer: impl fmt::Display,
+    date: &Date,
+    request: &str,
+    status: u16,
+    bytes: impl fmt::Display,
+    referer: &str,
+    ua: &str,
+    ms: Option<u128>,
+) {
+    match ms {
+        Some(ms) => log::info!(
+            "{} - - {} \"{}\" {} {} \"{}\" \"{}\" {}ms",
+            peer,
+            date.clf(),
+            request,
+            status,
+            bytes,
+            referer,
+            ua,
+            ms
+        ),
+        None => log::info!(
+            "{} - - {} \"{}\" {} {} \"{}\" \"{}\"",
+            peer,
+            date.clf(),
+            request,
+            status,
+            bytes,
+            referer,
+            ua
+        ),
     }
 }
 
