@@ -115,6 +115,7 @@ impl Response {
         stream: &mut TcpStream,
         keep_alive: Option<Duration>,
         send_body: bool,
+        date: &Date,
     ) -> std::io::Result<()> {
         let mut w = io::BufWriter::new(&mut *stream);
 
@@ -125,7 +126,7 @@ impl Response {
             self.status_code.as_str()
         )?;
 
-        write!(w, "Date: {}\r\n", Date::now().http())?;
+        write!(w, "Date: {}\r\n", date.http())?;
         if let Some(ct) = &self.content_type {
             write!(w, "Content-Type: {}\r\n", ct.as_str())?;
         }

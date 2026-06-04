@@ -18,10 +18,10 @@ impl SseResponse {
     }
 }
 
-pub(crate) fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
+pub(crate) fn send_sse_headers(stream: &mut TcpStream, date: &Date) -> io::Result<()> {
     let mut w = io::BufWriter::new(stream);
     write!(w, "HTTP/1.1 200 OK\r\n")?;
-    write!(w, "Date: {}\r\n", Date::now().http())?;
+    write!(w, "Date: {}\r\n", date.http())?;
     write!(w, "Content-Type: text/event-stream\r\n")?;
     write!(w, "Cache-Control: no-cache\r\n")?;
     write!(w, "Connection: close\r\n")?;

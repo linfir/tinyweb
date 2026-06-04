@@ -243,6 +243,7 @@ where
                     &mut stream,
                     keep_alive.then_some(config.idle_timeout),
                     req.method != Method::HEAD,
+                    &recv_date,
                 ) {
                     log::error!("Failed to send response: {}", e);
                     return;
@@ -266,7 +267,7 @@ where
                 }
             }
             AnyResponseImpl::Sse(SseResponse(sse_handler)) => {
-                if let Err(e) = send_sse_headers(&mut stream) {
+                if let Err(e) = send_sse_headers(&mut stream, &recv_date) {
                     log::error!("Failed to send SSE headers: {}", e);
                     return;
                 }
@@ -368,5 +369,5 @@ fn sanitize_path(path: &str) -> String {
 }
 
 fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
-    let _ = Response::error(status_code).send(stream, None, true);
+    let _ = Response::error(status_code).send(stream, None, true, &Date::now());
 }
