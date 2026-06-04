@@ -161,6 +161,7 @@ where
             .get("connection")
             .map(|v| v.eq_ignore_ascii_case("close"))
             .unwrap_or(false);
+        let safe_path = sanitize_path(&req.path);
 
         stream
             .set_write_timeout(Some(config.write_timeout))
@@ -178,7 +179,7 @@ where
                         "{} {} {} {} {}ms",
                         peer_addr,
                         req.method.as_str(),
-                        req.path,
+                        safe_path,
                         status.as_u16(),
                         start.elapsed().as_millis()
                     );
@@ -204,7 +205,7 @@ where
                         "{} {} {} {} {}ms",
                         peer_addr,
                         req.method.as_str(),
-                        req.path,
+                        safe_path,
                         status.as_u16(),
                         start.elapsed().as_millis()
                     );
@@ -223,7 +224,7 @@ where
                         "{} {} {} {} SSE open",
                         peer_addr,
                         req.method.as_str(),
-                        req.path,
+                        safe_path,
                         StatusCode::Ok.as_u16()
                     );
                 }
@@ -234,7 +235,7 @@ where
                         "{} {} {} SSE closed {}ms",
                         peer_addr,
                         req.method.as_str(),
-                        req.path,
+                        safe_path,
                         start.elapsed().as_millis()
                     );
                 }
@@ -242,6 +243,18 @@ where
             }
         }
     }
+}
+
+fn sanitize_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
+        if b.is_ascii() && !b.is_ascii_control() {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("\\x{:02X}", b));
+        }
+    }
+    out
 }
 
 fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
