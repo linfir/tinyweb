@@ -36,7 +36,8 @@ impl Response {
 
     /// Returns the response with the given body and content type.
     pub fn with_body(mut self, content_type: ContentType, body: impl Into<Vec<u8>>) -> Self {
-        self.content_type = Some(HeaderValue(content_type.into_string()));
+        self.content_type =
+            Some(HeaderValue::new(content_type.into_string()).expect("valid content type"));
         self.body = body.into();
         self
     }

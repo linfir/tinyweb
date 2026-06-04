@@ -390,6 +390,7 @@ pub(crate) enum HeaderNameInner {
     StrictTransportSecurity,
     XContentTypeOptions,
     XFrameOptions,
+    ReferrerPolicy,
     Custom(String),
 }
 
@@ -410,6 +411,7 @@ impl HeaderNameInner {
             Self::StrictTransportSecurity => "Strict-Transport-Security",
             Self::XContentTypeOptions => "X-Content-Type-Options",
             Self::XFrameOptions => "X-Frame-Options",
+            Self::ReferrerPolicy => "Referrer-Policy",
             Self::Custom(s) => s.as_str(),
         }
     }
@@ -454,4 +456,6 @@ impl HeaderName {
     pub const X_CONTENT_TYPE_OPTIONS: Self = HeaderName(HeaderNameInner::XContentTypeOptions);
     /// The `X-Frame-Options` header.
     pub const X_FRAME_OPTIONS: Self = HeaderName(HeaderNameInner::XFrameOptions);
+    /// The `Referrer-Policy` header.
+    pub const REFERRER_POLICY: Self = HeaderName(HeaderNameInner::ReferrerPolicy);
 }

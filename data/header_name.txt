@@ -12,3 +12,4 @@ Access-Control-Expose-Headers
 Strict-Transport-Security
 X-Content-Type-Options
 X-Frame-Options
+Referrer-Policy

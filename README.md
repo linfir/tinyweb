@@ -41,6 +41,28 @@ fn main() {
 }
 ```
 
+## Security headers
+
+tinyweb does not emit security headers by default; add them in your handler:
+
+```rust,no_run
+use tinyweb::{HeaderName, HeaderValue, Response};
+
+fn secure(resp: Response) -> Response {
+    resp.with_header(HeaderName::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff").unwrap())
+        .with_header(HeaderName::X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN").unwrap())
+        .with_header(HeaderName::REFERRER_POLICY, HeaderValue::from_static("strict-origin-when-cross-origin").unwrap())
+}
+```
+
+If traffic is TLS-terminated by a reverse proxy, also add:
+
+```text
+Strict-Transport-Security: max-age=63072000
+```
+
+`Content-Security-Policy` is application-specific; restrict script and style sources to what your app actually uses.
+
 ## More examples
 
 See the [`examples/`](examples/) directory:
