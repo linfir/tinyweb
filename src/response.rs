@@ -49,6 +49,8 @@ impl Response {
     fn add_header(&mut self, name: HeaderName, value: HeaderValue) {
         if name.as_str().eq_ignore_ascii_case("content-length")
             || name.as_str().eq_ignore_ascii_case("connection")
+            || name.as_str().eq_ignore_ascii_case("keep-alive")
+            || name.as_str().eq_ignore_ascii_case("date")
         {
             return;
         }
