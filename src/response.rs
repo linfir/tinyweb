@@ -186,16 +186,23 @@ fn http_date_from(secs: u64) -> String {
 
 #[test]
 fn test_http_date_from() {
-    // Epoch
     assert_eq!(http_date_from(0), "Thu, 01 Jan 1970 00:00:00 GMT");
-    // Last second of day 1
     assert_eq!(http_date_from(86399), "Thu, 01 Jan 1970 23:59:59 GMT");
-    // Start of day 2
     assert_eq!(http_date_from(86400), "Fri, 02 Jan 1970 00:00:00 GMT");
-    // Leap day in year-2000 (divisible by 400)
     assert_eq!(http_date_from(951782400), "Tue, 29 Feb 2000 00:00:00 GMT");
-    // Jan 1, 2025, noon
     assert_eq!(http_date_from(1735732800), "Wed, 01 Jan 2025 12:00:00 GMT");
+}
+
+#[test]
+fn test_http_date_from_random() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/date_test_cases.txt");
+    let Ok(data) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in data.lines() {
+        let (secs, expected) = line.split_once(' ').unwrap();
+        assert_eq!(http_date_from(secs.parse().unwrap()), expected);
+    }
 }
 
 impl Default for Response {
