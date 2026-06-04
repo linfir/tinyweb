@@ -311,7 +311,13 @@ where
                 let mut writer = SseWriter::new(stream);
                 sse_handler(&mut writer);
                 if config.access_log {
-                    log::info!("{} SSE closed {}ms", peer_addr, start.elapsed().as_millis(),);
+                    log::info!(
+                        "{} {} {} SSE closed {}ms",
+                        peer_addr,
+                        req.method.as_str(),
+                        safe_path,
+                        start.elapsed().as_millis(),
+                    );
                 }
                 return;
             }
