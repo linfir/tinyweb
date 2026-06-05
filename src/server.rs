@@ -1,7 +1,6 @@
 use std::{
-    convert::Infallible,
-    fmt, io,
-    net::{TcpListener, TcpStream, ToSocketAddrs},
+    fmt,
+    net::{TcpListener, TcpStream},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -82,60 +81,26 @@ impl From<SseResponse> for AnyResponse {
     }
 }
 
-/// Error returned by [`serve`] on invalid config or bind failure.
-#[derive(Debug)]
-pub enum ServeError {
-    /// A configuration field has an invalid value.
-    InvalidConfig(&'static str),
-    /// The server address could not be bound.
-    Bind(io::Error),
-}
-
-impl fmt::Display for ServeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidConfig(msg) => write!(f, "invalid config: {msg}"),
-            Self::Bind(e) => write!(f, "cannot bind: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ServeError {}
-
-/// Binds to `addr` and starts handling incoming connections.
+/// Starts handling incoming connections on `listener`.
 ///
 /// Requests are dispatched to a thread pool.
 /// Pool size and timeouts are controlled by `config`; use [`Config::default`] for sensible defaults.
 ///
 /// For HEAD requests, the handler is called normally but the response body is not sent.
 ///
-/// Returns `Err` if the config is invalid or the address cannot be bound.
-pub fn serve<A, F, R>(addr: A, config: Config, handler: F) -> Result<Infallible, ServeError>
+/// Panics if any `config` field is zero.
+pub fn serve<F, R>(listener: TcpListener, config: Config, handler: F) -> !
 where
-    A: ToSocketAddrs,
     F: Fn(&Request) -> R + Send + Sync + 'static,
     R: Into<AnyResponse>,
 {
-    if config.pool_size == 0 {
-        return Err(ServeError::InvalidConfig("pool_size must be > 0"));
-    }
-    if config.max_header_size == 0 {
-        return Err(ServeError::InvalidConfig("max_header_size must be > 0"));
-    }
-    if config.max_body_size == 0 {
-        return Err(ServeError::InvalidConfig("max_body_size must be > 0"));
-    }
-    if config.read_timeout.is_zero() {
-        return Err(ServeError::InvalidConfig("read_timeout must be > 0"));
-    }
-    if config.idle_timeout.is_zero() {
-        return Err(ServeError::InvalidConfig("idle_timeout must be > 0"));
-    }
-    if config.write_timeout.is_zero() {
-        return Err(ServeError::InvalidConfig("write_timeout must be > 0"));
-    }
+    assert!(config.pool_size > 0, "pool_size must be > 0");
+    assert!(config.max_header_size > 0, "max_header_size must be > 0");
+    assert!(config.max_body_size > 0, "max_body_size must be > 0");
+    assert!(!config.read_timeout.is_zero(), "read_timeout must be > 0");
+    assert!(!config.idle_timeout.is_zero(), "idle_timeout must be > 0");
+    assert!(!config.write_timeout.is_zero(), "write_timeout must be > 0");
 
-    let listener = TcpListener::bind(addr).map_err(ServeError::Bind)?;
     let handler = Arc::new(handler);
     let config = Arc::new(config);
     let pool = ThreadPool::new(config.pool_size);

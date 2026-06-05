@@ -1,3 +1,5 @@
+use std::net::TcpListener;
+
 use matchit::Router;
 use tinyweb::{Config, ContentType, Method, Request, Response};
 
@@ -6,7 +8,11 @@ fn main() {
     router.insert("/", "index").unwrap();
     router.insert("/users/:id", "user").unwrap();
 
-    let Err(e) = tinyweb::serve("127.0.0.1:8080", Config::default(), move |req: &Request| {
+    let listener = TcpListener::bind("127.0.0.1:8080").unwrap_or_else(|e| {
+        eprintln!("bind: {e}");
+        std::process::exit(1);
+    });
+    tinyweb::serve(listener, Config::default(), move |req: &Request| {
         let Ok(matched) = router.at(req.path.as_str()) else {
             return Response::not_found();
         };
@@ -19,5 +25,4 @@ fn main() {
             _ => Response::not_found(),
         }
     });
-    eprintln!("Error: {e}");
 }

@@ -7,22 +7,14 @@ use std::{
 
 use tinyweb::{Config, Method, Request, Response};
 
-fn find_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 fn start_server<F>(handler: F, config: Config) -> u16
 where
     F: Fn(&Request) -> Response + Send + Sync + 'static,
 {
-    let port = find_port();
-    let addr = format!("127.0.0.1:{}", port);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        tinyweb::serve(addr, config, handler).unwrap();
+        tinyweb::serve(listener, config, handler);
     });
     std::thread::sleep(Duration::from_millis(100));
     port

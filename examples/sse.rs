@@ -1,10 +1,14 @@
-use std::{thread, time::Duration};
+use std::{net::TcpListener, thread, time::Duration};
 
 use tinyweb::{AnyResponse, Config, Method, Request, Response, SseResponse};
 
 fn main() {
-    let Err(e) = tinyweb::serve(
-        "127.0.0.1:8080",
+    let listener = TcpListener::bind("127.0.0.1:8080").unwrap_or_else(|e| {
+        eprintln!("bind: {e}");
+        std::process::exit(1);
+    });
+    tinyweb::serve(
+        listener,
         Config::default(),
         |req: &Request| -> AnyResponse {
             match (req.method, req.path.as_str()) {
@@ -21,5 +25,4 @@ fn main() {
             }
         },
     );
-    eprintln!("Error: {e}");
 }

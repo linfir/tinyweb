@@ -29,10 +29,15 @@ A reverse proxy such as nginx mitigates this by buffering requests and using sho
 ## Usage
 
 ```rust,no_run
+use std::net::TcpListener;
 use tinyweb::{Config, ContentType, Method, Request, Response};
 
 fn main() {
-    let Err(_) = tinyweb::serve("127.0.0.1:8080", Config::default(), |req: &Request| {
+    let listener = TcpListener::bind("127.0.0.1:8080").unwrap_or_else(|e| {
+        eprintln!("bind: {e}");
+        std::process::exit(1);
+    });
+    tinyweb::serve(listener, Config::default(), |req: &Request| {
         match (req.method, req.path.as_str()) {
             (Method::GET, "/") => Response::ok(ContentType::HTML, "<h1>Hello!</h1>"),
             _ => Response::not_found(),
