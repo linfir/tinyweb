@@ -149,9 +149,13 @@ impl<'a> Reader<'a> {
                 .get("expect")
                 .map(|v| v.eq_ignore_ascii_case("100-continue"))
                 .unwrap_or(false)
-                && stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err()
             {
-                return Err(Error::Closed);
+                stream
+                    .set_write_timeout(Some(self.config.write_timeout))
+                    .unwrap();
+                if stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() {
+                    return Err(Error::Closed);
+                }
             }
 
             self.read_body(stream, content_length, deadline)?;
