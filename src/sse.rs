@@ -43,12 +43,8 @@ impl SseWriter {
 
     /// Sends an unnamed event.
     pub fn send(&mut self, data: &str) -> io::Result<()> {
-        if data.is_empty() {
-            writeln!(self.inner, "data:")?;
-        } else {
-            for line in data.lines() {
-                writeln!(self.inner, "data:{}", line)?;
-            }
+        for line in lines_lf(data) {
+            writeln!(self.inner, "data:{}", line)?;
         }
         writeln!(self.inner)?;
         self.inner.flush()
@@ -63,7 +59,7 @@ impl SseWriter {
             ));
         }
         writeln!(self.inner, "event:{}", event)?;
-        for line in data.lines() {
+        for line in lines_lf(data) {
             writeln!(self.inner, "data:{}", line)?;
         }
         writeln!(self.inner)?;
@@ -75,4 +71,28 @@ impl SseWriter {
         write!(self.inner, ":\n\n")?;
         self.inner.flush()
     }
+}
+
+/// Split `s` into lines on `\n`, stripping trailing `\r` from each segment.
+///
+/// Unlike [`str::lines`], this always yields at least one segment (empty string
+/// gives `[""]`), and a trailing `\n` produces a final empty segment -- so the
+/// round-trip through SSE `data:` fields is lossless.
+fn lines_lf(s: &str) -> impl Iterator<Item = &str> {
+    s.split('\n').map(|l| l.trim_end_matches('\r'))
+}
+
+#[test]
+fn test_lines_lf() {
+    let v = |s| lines_lf(s).collect::<Vec<_>>();
+    // str::lines() yields nothing; lines_lf yields one empty segment
+    assert_eq!(v(""), [""]);
+    // no newline: single segment
+    assert_eq!(v("hello"), ["hello"]);
+    // trailing \n: extra empty segment (unlike str::lines)
+    assert_eq!(v("hello\n"), ["hello", ""]);
+    // internal newline
+    assert_eq!(v("hello\nworld"), ["hello", "world"]);
+    // CRLF: \r stripped from each segment
+    assert_eq!(v("hello\r\nworld\r\n"), ["hello", "world", ""]);
 }
