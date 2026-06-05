@@ -45,7 +45,9 @@ impl ThreadPool {
 fn spawn_worker(receiver: Arc<Mutex<mpsc::Receiver<Job>>>) {
     thread::spawn(move || {
         loop {
-            let job = receiver.lock().unwrap().recv().unwrap();
+            let Ok(job) = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv() else {
+                return;
+            };
             // the lock is released here
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
                 log::error!("worker panicked, respawning");
