@@ -152,7 +152,7 @@ impl<'a> Reader<'a> {
             {
                 stream
                     .set_write_timeout(Some(self.config.write_timeout))
-                    .unwrap();
+                    .map_err(|_| Error::Closed)?;
                 if stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() {
                     return Err(Error::Closed);
                 }
@@ -210,7 +210,9 @@ impl<'a> Reader<'a> {
             if remaining.is_zero() {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
-            stream.set_read_timeout(Some(remaining)).unwrap();
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| Error::Closed)?;
             match stream.read(self.buf.rest_mut()) {
                 Ok(0) => return Err(Error::Closed),
                 Ok(n) => {
@@ -253,7 +255,9 @@ impl<'a> Reader<'a> {
             if remaining.is_zero() {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
-            stream.set_read_timeout(Some(remaining)).unwrap();
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| Error::Closed)?;
             match stream.read(self.buf.rest_mut()) {
                 Ok(0) => return Err(Error::Closed),
                 Ok(n) => self.buf.advance(n),

@@ -205,9 +205,12 @@ where
             .unwrap_or(false);
         let safe_path = sanitize_path(&req.path);
 
-        stream
+        if stream
             .set_write_timeout(Some(config.write_timeout))
-            .unwrap();
+            .is_err()
+        {
+            return;
+        }
 
         let response =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));
