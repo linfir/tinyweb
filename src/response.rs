@@ -43,6 +43,10 @@ impl Response {
     }
 
     /// Returns the response with an additional HTTP header.
+    ///
+    /// `Content-Length`, `Connection`, `Keep-Alive`, and `Date` are managed by
+    /// the server and silently ignored if passed here.
+    /// Use [`Response::with_body`] to set `Content-Type`.
     pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
         self.add_header(name, value);
         self
