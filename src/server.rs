@@ -201,7 +201,7 @@ where
         let keep_alive = !req
             .headers
             .get("connection")
-            .map(|v| v.eq_ignore_ascii_case("close"))
+            .map(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")))
             .unwrap_or(false);
         let safe_path = sanitize_path(&req.path);
 
