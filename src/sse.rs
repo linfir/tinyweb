@@ -73,13 +73,27 @@ impl SseWriter {
     }
 }
 
-/// Split `s` into lines on `\n`, stripping trailing `\r` from each segment.
+/// Split `s` into lines on `\r\n`, `\r`, or `\n`.
 ///
 /// Unlike [`str::lines`], this always yields at least one segment (empty string
-/// gives `[""]`), and a trailing `\n` produces a final empty segment -- so the
+/// gives `[""]`), and a trailing newline produces a final empty segment -- so the
 /// round-trip through SSE `data:` fields is lossless.
 fn lines_lf(s: &str) -> impl Iterator<Item = &str> {
-    s.split('\n').map(|l| l.trim_end_matches('\r'))
+    let mut remaining = Some(s);
+    std::iter::from_fn(move || {
+        let s = remaining?;
+        match s.find(['\r', '\n']) {
+            None => {
+                remaining = None;
+                Some(s)
+            }
+            Some(i) => {
+                let skip = if s[i..].starts_with("\r\n") { 2 } else { 1 };
+                remaining = Some(&s[i + skip..]);
+                Some(&s[..i])
+            }
+        }
+    })
 }
 
 #[test]
@@ -93,6 +107,11 @@ fn test_lines_lf() {
     assert_eq!(v("hello\n"), ["hello", ""]);
     // internal newline
     assert_eq!(v("hello\nworld"), ["hello", "world"]);
-    // CRLF: \r stripped from each segment
+    // CRLF: treated as a single terminator
     assert_eq!(v("hello\r\nworld\r\n"), ["hello", "world", ""]);
+    // bare CR: treated as a line terminator (SSE spec)
+    assert_eq!(v("hello\rworld"), ["hello", "world"]);
+    assert_eq!(v("hello\r"), ["hello", ""]);
+    // injection attempt via bare CR is split into separate lines
+    assert_eq!(v("x\revent:admin"), ["x", "event:admin"]);
 }
