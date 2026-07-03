@@ -14,7 +14,7 @@ mod types;
 pub use crate::{
     request::Request,
     response::Response,
-    server::{AnyResponse, Config, serve},
+    server::{AnyResponse, Config, serve, serve_graceful},
     sse::{SseResponse, SseWriter},
     types::*,
 };

@@ -1,11 +1,12 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
+    thread::JoinHandle,
     time::Duration,
 };
 
-use tinyweb::{Config, Method, Request, Response};
+use tinyweb::{AnyResponse, Config, Method, Request, Response, SseResponse};
 
 fn start_server<F>(handler: F, config: Config) -> u16
 where
@@ -18,6 +19,24 @@ where
     });
     std::thread::sleep(Duration::from_millis(100));
     port
+}
+
+fn start_server_graceful<F, R>(
+    handler: F,
+    config: Config,
+) -> (u16, mpsc::Sender<()>, JoinHandle<()>)
+where
+    F: Fn(&Request) -> R + Send + Sync + 'static,
+    R: Into<AnyResponse>,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let join = std::thread::spawn(move || {
+        tinyweb::serve_graceful(listener, config, handler, stop_rx);
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    (port, stop_tx, join)
 }
 
 fn raw_request(port: u16, request: &[u8]) -> String {
@@ -195,6 +214,156 @@ fn test_duplicate_host_rejected() {
         b"GET / HTTP/1.1\r\nHost: localhost\r\nHost: evil\r\n\r\n",
     );
     assert!(status_line(&resp).contains("400"), "response: {}", resp);
+}
+
+#[test]
+fn test_shutdown_and_join() {
+    let (port, stop_tx, join) = start_server_graceful(
+        |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
+        Config::default(),
+    );
+
+    // server is up
+    let resp = raw_request(port, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(status_line(&resp).contains("200"), "response: {}", resp);
+
+    stop_tx.send(()).unwrap();
+    join.join().unwrap(); // must return promptly
+}
+
+#[test]
+fn test_shutdown_closes_keep_alive() {
+    let (port, stop_tx, join) = start_server_graceful(
+        |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
+        Config::default(),
+    );
+
+    // Hold a keep-alive connection open across the shutdown.
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).unwrap();
+    let resp1 = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+    assert!(resp1.contains("connection: keep-alive"), "resp1: {}", resp1);
+
+    stop_tx.send(()).unwrap();
+    std::thread::sleep(Duration::from_millis(100)); // let the flag get set
+
+    // A request sent during shutdown is served, then the connection is closed.
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let n = stream.read(&mut buf).unwrap();
+    let resp2 = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+    assert!(resp2.contains("200"), "resp2: {}", resp2);
+    assert!(resp2.contains("connection: close"), "resp2: {}", resp2);
+
+    join.join().unwrap();
+}
+
+#[test]
+fn test_shutdown_drains_idle_keep_alive_promptly() {
+    let mut config = Config::default();
+    config.idle_timeout = Duration::from_secs(30);
+    config.shutdown_timeout = Some(Duration::from_secs(10));
+    let (port, stop_tx, join) = start_server_graceful(
+        |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
+        config,
+    );
+
+    // Open a keep-alive connection and leave it idle (no second request).
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).unwrap();
+    let resp1 = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+    assert!(resp1.contains("connection: keep-alive"), "resp1: {}", resp1);
+
+    let start = std::time::Instant::now();
+    stop_tx.send(()).unwrap();
+    join.join().unwrap();
+    // Must drain well under idle_timeout/shutdown_timeout, not wait them out.
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "shutdown took {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn test_shutdown_timeout_cuts_stuck_connection() {
+    let mut config = Config::default();
+    config.shutdown_timeout = Some(Duration::from_millis(200));
+    let (port, stop_tx, join) = start_server_graceful(
+        |_req| {
+            // Ignores the shutdown signal entirely.
+            std::thread::sleep(Duration::from_secs(5));
+            Response::ok(tinyweb::ContentType::PLAIN, "late")
+        },
+        config,
+    );
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+    stream
+        .write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100)); // let the request reach the handler
+
+    let start = std::time::Instant::now();
+    stop_tx.send(()).unwrap();
+
+    // The client socket must be cut at ~200ms, not held until the handler ends.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    assert_eq!(n, 0, "expected the connection to be cut");
+    assert!(start.elapsed() < Duration::from_secs(2));
+
+    // serve_graceful returns after the abort grace, without joining the stuck worker.
+    join.join().unwrap();
+    assert!(start.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn test_shutdown_drains_sse() {
+    let (port, stop_tx, join) = start_server_graceful(
+        |_req| {
+            SseResponse::new(|w| {
+                while !w.is_shutdown() {
+                    if w.keepalive().is_err() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            })
+        },
+        Config::default(),
+    );
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+    stream
+        .write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).unwrap();
+    let resp = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+    assert!(resp.contains("text/event-stream"), "resp: {}", resp);
+
+    let start = std::time::Instant::now();
+    stop_tx.send(()).unwrap();
+    join.join().unwrap();
+    // The handler polls is_shutdown, so the drain must beat the 2s timeout.
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "shutdown took {:?}",
+        start.elapsed()
+    );
 }
 
 #[test]

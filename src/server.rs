@@ -1,9 +1,11 @@
 use std::{
+    collections::HashMap,
     fmt,
-    net::{TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
     },
     time::{Duration, Instant},
 };
@@ -40,6 +42,13 @@ pub struct Config {
     /// Timeout for writing the response.
     /// Default: 5 seconds.
     pub write_timeout: Duration,
+    /// How long [`serve_graceful`] waits for in-flight requests to finish after the stop signal.
+    /// `None` waits indefinitely.
+    /// When the timeout elapses, the sockets of the remaining connections are shut down;
+    /// handlers that still do not finish within a short grace period keep running on
+    /// detached threads and are killed at process exit.
+    /// Default: `Some(2 seconds)`.
+    pub shutdown_timeout: Option<Duration>,
     /// Emit a `log::info!` line for every completed request (peer IP, method, path, status, latency).
     /// Default: `true`.
     pub access_log: bool,
@@ -68,6 +77,7 @@ impl Default for Config {
             read_timeout: Duration::from_secs(5),
             idle_timeout: Duration::from_secs(30),
             write_timeout: Duration::from_secs(5),
+            shutdown_timeout: Some(Duration::from_secs(2)),
             max_body_size: 64 * 1024,
             max_header_size: 8 * 1024,
             access_log: true,
@@ -75,8 +85,86 @@ impl Default for Config {
     }
 }
 
+// How long to keep waiting after cutting the sockets of connections that
+// outlived shutdown_timeout, before detaching their worker threads.
+const SHUTDOWN_ABORT_GRACE: Duration = Duration::from_secs(1);
+
 // Process-wide request id counter; ids end access log lines as #id.
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+// Tracks in-flight connections so shutdown can wait for them to drain,
+// and cut their sockets if they outlive the drain timeout.
+struct Drain {
+    conns: Mutex<HashMap<u64, Option<TcpStream>>>,
+    cv: Condvar,
+    next_id: AtomicU64,
+}
+
+impl Drain {
+    fn new() -> Arc<Self> {
+        Arc::new(Drain {
+            conns: Mutex::new(HashMap::new()),
+            cv: Condvar::new(),
+            next_id: AtomicU64::new(0),
+        })
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<u64, Option<TcpStream>>> {
+        self.conns.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // Registers a connection; it stays in flight until the guard is dropped.
+    fn register(self: &Arc<Self>, socket: Option<TcpStream>) -> ConnGuard {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.lock().insert(id, socket);
+        ConnGuard {
+            drain: self.clone(),
+            id,
+        }
+    }
+
+    // Waits until all connections are done or `timeout` elapses.
+    // Returns the number of connections still in flight.
+    fn wait(&self, timeout: Option<Duration>) -> usize {
+        let guard = self.lock();
+        match timeout {
+            None => self
+                .cv
+                .wait_while(guard, |m| !m.is_empty())
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            Some(t) => self
+                .cv
+                .wait_timeout_while(guard, t, |m| !m.is_empty())
+                .unwrap_or_else(|e| e.into_inner())
+                .0
+                .len(),
+        }
+    }
+
+    // Shuts down the sockets of all connections still in flight, so their
+    // blocked reads and writes fail instead of holding up the drain.
+    fn cut_sockets(&self) {
+        for s in self.lock().values_mut().filter_map(Option::take) {
+            let _ = s.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+struct ConnGuard {
+    drain: Arc<Drain>,
+    id: u64,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        let mut m = self.drain.lock();
+        m.remove(&self.id);
+        if m.is_empty() {
+            self.drain.cv.notify_all();
+        }
+    }
+}
 
 enum AnyResponseImpl {
     Regular(Response),
@@ -100,7 +188,6 @@ impl From<SseResponse> for AnyResponse {
 
 /// Starts handling incoming connections on `listener`.
 ///
-/// Requests are dispatched to a thread pool.
 /// Pool size and timeouts are controlled by `config`; use [`Config::default`] for sensible defaults.
 ///
 /// For HEAD requests, the handler is called normally but the response body is not sent.
@@ -142,7 +229,153 @@ where
             }
         }
     }
-    unreachable!();
+    unreachable!()
+}
+
+/// Starts handling incoming connections on `listener`.
+/// Blocks the calling thread until `stop` receives a message (or all senders are dropped),
+/// then shuts down gracefully: pending and new connections are rejected with a
+/// [`StatusCode::ServiceUnavailable`] response, and the function waits for all in-flight
+/// requests to complete before returning.
+///
+/// Pool size and timeouts are controlled by `config`; use [`Config::default`] for sensible defaults.
+///
+/// The stop signal wakes the accept loop by connecting to the listener's own
+/// address. If the listen address is not self-connectable (e.g. a firewall
+/// blocks it), shutdown is delayed until the next incoming connection.
+pub fn serve_graceful<F, R>(
+    listener: TcpListener,
+    config: Config,
+    handler: F,
+    stop: mpsc::Receiver<()>,
+) where
+    F: Fn(&Request) -> R + Send + Sync + 'static,
+    R: Into<AnyResponse>,
+{
+    config.validate();
+    if let Err(e) = listener.set_nonblocking(false) {
+        log::warn!("Cannot set listener to blocking mode: {}", e);
+    }
+    let handler = Arc::new(handler);
+    let config = Arc::new(config);
+    let pool = ThreadPool::new(config.pool_size);
+    let drain = Drain::new();
+    let shutdown = Arc::new(AtomicBool::new(false));
+
+    let wake_addr = listener
+        .local_addr()
+        .inspect_err(|e| log::warn!("Cannot get listener address to wake the accept loop: {}", e))
+        .ok();
+    spawn_stop_watcher(stop, shutdown.clone(), wake_addr);
+
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                if shutdown.load(Ordering::SeqCst) {
+                    // Likely the watcher's wake connection; a real client gets a 503.
+                    let _ = stream.set_write_timeout(Some(config.write_timeout));
+                    send_error(&mut stream, StatusCode::ServiceUnavailable);
+                    break;
+                }
+                let handler = handler.clone();
+                let config = config.clone();
+                let shutdown = shutdown.clone();
+                let write_timeout = config.write_timeout;
+                let stream_copy = stream.try_clone();
+                let guard = drain.register(stream.try_clone().ok());
+                if !pool.execute(move || {
+                    // On failure, execute drops the closure, and with it the guard.
+                    let _guard = guard;
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_stream(stream, handler, &config, shutdown);
+                    }))
+                    .is_err()
+                    {
+                        log::error!("internal error: handle_stream panicked");
+                    }
+                }) {
+                    log::warn!("thread pool full, rejecting connection");
+                    if let Ok(mut s) = stream_copy {
+                        let _ = s.set_write_timeout(Some(write_timeout));
+                        send_error(&mut s, StatusCode::ServiceUnavailable);
+                    }
+                }
+            }
+            Err(e) => {
+                if shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                // WouldBlock means the caller left the listener nonblocking.
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    log::error!("Cannot establish connection: {}", e);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    reject_backlog(&listener, config.write_timeout);
+    drop(listener);
+
+    let mut remaining = drain.wait(config.shutdown_timeout);
+    if remaining > 0 {
+        log::warn!(
+            "Shutdown timed out with {} connection(s) still active, closing their sockets",
+            remaining
+        );
+        drain.cut_sockets();
+        remaining = drain.wait(Some(SHUTDOWN_ABORT_GRACE));
+        if remaining > 0 {
+            log::warn!(
+                "{} connection(s) did not finish, detaching their worker threads",
+                remaining
+            );
+            return;
+        }
+    }
+    pool.join();
+}
+
+// Waits for the stop signal, then sets the shutdown flag (telling in-flight
+// connections to stop keep-alive and SSE handlers to wind down) and wakes the
+// blocking accept loop with a dummy connection.
+fn spawn_stop_watcher(
+    stop: mpsc::Receiver<()>,
+    shutdown: Arc<AtomicBool>,
+    addr: Option<SocketAddr>,
+) {
+    std::thread::spawn(move || {
+        let _ = stop.recv();
+        shutdown.store(true, Ordering::SeqCst);
+        let Some(mut addr) = addr else { return };
+        if addr.ip().is_unspecified() {
+            addr.set_ip(if addr.is_ipv4() {
+                IpAddr::V4(Ipv4Addr::LOCALHOST)
+            } else {
+                IpAddr::V6(Ipv6Addr::LOCALHOST)
+            });
+        }
+        if let Err(e) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
+            log::error!("Cannot wake accept loop: {}", e);
+        }
+    });
+}
+
+// Replies 503 to connections still queued in the kernel accept backlog,
+// so they get an orderly answer instead of a reset when the listener drops.
+fn reject_backlog(listener: &TcpListener, write_timeout: Duration) {
+    if listener.set_nonblocking(true).is_err() {
+        return;
+    }
+    for _ in 0..128 {
+        match listener.accept() {
+            Ok((mut s, _)) => {
+                let _ = s.set_write_timeout(Some(write_timeout));
+                send_error(&mut s, StatusCode::ServiceUnavailable);
+            }
+            Err(_) => break,
+        }
+    }
 }
 
 fn handle_stream<F, R>(
