@@ -1,6 +1,10 @@
 use std::{
     io::{self, BufWriter, Write},
     net::TcpStream,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crate::date::Date;
@@ -32,13 +36,21 @@ pub(crate) fn send_sse_headers(stream: &mut TcpStream, date: &Date) -> io::Resul
 /// Writes Server-Sent Events to an open connection.
 pub struct SseWriter {
     inner: BufWriter<TcpStream>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl SseWriter {
-    pub(crate) fn new(stream: TcpStream) -> Self {
+    pub(crate) fn new(stream: TcpStream, shutdown: Arc<AtomicBool>) -> Self {
         SseWriter {
             inner: BufWriter::new(stream),
+            shutdown,
         }
+    }
+
+    /// Returns `true` once the server has begun a graceful shutdown.
+    /// Long-lived handlers should poll this and return so the connection can drain.
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::Relaxed)
     }
 
     /// Sends an unnamed event.

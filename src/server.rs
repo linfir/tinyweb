@@ -3,7 +3,7 @@ use std::{
     net::{TcpListener, TcpStream},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -116,15 +116,17 @@ where
     let handler = Arc::new(handler);
     let config = Arc::new(config);
     let pool = ThreadPool::new(config.pool_size);
+    let shutdown = Arc::new(AtomicBool::new(false));
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let handler = handler.clone();
                 let config = config.clone();
+                let shutdown = shutdown.clone();
                 let write_timeout = config.write_timeout;
                 let stream_copy = stream.try_clone();
                 if !pool.execute(move || {
-                    handle_stream(stream, handler, &config);
+                    handle_stream(stream, handler, &config, shutdown);
                 }) {
                     log::warn!("thread pool full, rejecting connection");
                     if let Ok(mut s) = stream_copy {
@@ -143,8 +145,12 @@ where
     unreachable!();
 }
 
-fn handle_stream<F, R>(mut stream: TcpStream, req_handler: Arc<F>, config: &Config)
-where
+fn handle_stream<F, R>(
+    mut stream: TcpStream,
+    req_handler: Arc<F>,
+    config: &Config,
+    shutdown: Arc<AtomicBool>,
+) where
     F: Fn(&Request) -> R + Send + Sync + 'static,
     R: Into<AnyResponse>,
 {
@@ -165,7 +171,7 @@ where
         let start = Instant::now();
         let recv_date = Date::now();
         let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        let req = match rdr.read(&mut stream, id) {
+        let req = match rdr.read(&mut stream, &shutdown, id) {
             Ok(r) => r,
             Err(request::Error::Closed) => return,
             Err(request::Error::Protocol(status)) => {
@@ -191,7 +197,8 @@ where
             .headers
             .get("connection")
             .map(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")))
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && !shutdown.load(Ordering::Relaxed);
         let safe_path = sanitize_field(&req.path);
 
         let response =
@@ -273,7 +280,7 @@ where
                         req.id,
                     );
                 }
-                let mut writer = SseWriter::new(stream);
+                let mut writer = SseWriter::new(stream, shutdown.clone());
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     sse_handler(&mut writer)
                 }))

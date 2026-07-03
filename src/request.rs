@@ -2,7 +2,8 @@ use std::{
     collections::HashMap,
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpStream},
-    time::Instant,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -122,6 +123,10 @@ pub(crate) enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+// How often the idle-wait loop wakes up to check for a graceful shutdown
+// signal, rather than blocking for the full idle_timeout.
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
 pub(crate) struct Reader<'a> {
     config: &'a Config,
     first: bool,
@@ -143,8 +148,13 @@ impl<'a> Reader<'a> {
         }
     }
 
-    pub(crate) fn read(&mut self, stream: &mut TcpStream, id: u64) -> Result<Request> {
-        let (idx, deadline) = self.read_head(stream)?;
+    pub(crate) fn read(
+        &mut self,
+        stream: &mut TcpStream,
+        shutdown: &AtomicBool,
+        id: u64,
+    ) -> Result<Request> {
+        let (idx, deadline) = self.read_head(stream, shutdown)?;
 
         let head = parse_head(&self.buf.data()[..idx + 2])
             .ok_or(Error::Protocol(StatusCode::BadRequest))?;
@@ -224,7 +234,11 @@ impl<'a> Reader<'a> {
     // Returns the index of the end of the headers (the start of the body).
     // The body will start at this index + 4 (after the \r\n\r\n).
     // Also returns the read_timeout deadline to be shared with read_body.
-    fn read_head(&mut self, stream: &mut TcpStream) -> Result<(usize, Instant)> {
+    fn read_head(
+        &mut self,
+        stream: &mut TcpStream,
+        shutdown: &AtomicBool,
+    ) -> Result<(usize, Instant)> {
         let max_size = self.config.max_header_size;
         let sep = b"\r\n\r\n";
 
@@ -250,8 +264,15 @@ impl<'a> Reader<'a> {
             if remaining.is_zero() {
                 return Err(Error::Protocol(StatusCode::RequestTimeout));
             }
+            // While idle between keep-alive requests, wake up periodically (rather
+            // than blocking for the full idle_timeout) so a graceful shutdown can
+            // close the connection promptly instead of waiting it out.
+            if idle && shutdown.load(Ordering::Relaxed) {
+                return Err(Error::Closed);
+            }
+            let wait = remaining.min(SHUTDOWN_POLL_INTERVAL);
             stream
-                .set_read_timeout(Some(remaining))
+                .set_read_timeout(Some(wait))
                 .map_err(|_| Error::Closed)?;
             match stream.read(self.buf.rest_mut()) {
                 Ok(0) => return Err(Error::Closed),
@@ -271,11 +292,11 @@ impl<'a> Reader<'a> {
                 }
                 Err(e) => {
                     use std::io::ErrorKind::{TimedOut, WouldBlock};
-                    return Err(if matches!(e.kind(), TimedOut | WouldBlock) {
-                        Error::Protocol(StatusCode::RequestTimeout)
-                    } else {
-                        Error::Closed
-                    });
+                    if !matches!(e.kind(), TimedOut | WouldBlock) {
+                        return Err(Error::Closed);
+                    }
+                    // Timed out on the (possibly shortened) poll wait; loop back
+                    // to recheck the real deadline and the shutdown flag.
                 }
             }
         }
