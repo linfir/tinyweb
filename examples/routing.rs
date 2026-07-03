@@ -4,6 +4,8 @@ use matchit::Router;
 use tinyweb::{Config, ContentType, Method, Request, Response};
 
 fn main() {
+    env_logger::init();
+
     let mut router = Router::new();
     router.insert("/", "index").unwrap();
     router.insert("/users/:id", "user").unwrap();

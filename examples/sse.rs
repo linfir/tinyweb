@@ -3,6 +3,8 @@ use std::{net::TcpListener, thread, time::Duration};
 use tinyweb::{AnyResponse, Config, Method, Request, Response, SseResponse};
 
 fn main() {
+    env_logger::init();
+
     let listener = TcpListener::bind("127.0.0.1:8080").unwrap_or_else(|e| {
         eprintln!("bind: {e}");
         std::process::exit(1);
