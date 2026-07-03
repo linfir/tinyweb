@@ -42,6 +42,17 @@ pub struct Config {
     pub access_log: bool,
 }
 
+impl Config {
+    fn validate(&self) {
+        assert!(self.pool_size > 0, "pool_size must be > 0");
+        assert!(self.max_header_size > 0, "max_header_size must be > 0");
+        assert!(self.max_body_size > 0, "max_body_size must be > 0");
+        assert!(!self.read_timeout.is_zero(), "read_timeout must be > 0");
+        assert!(!self.idle_timeout.is_zero(), "idle_timeout must be > 0");
+        assert!(!self.write_timeout.is_zero(), "write_timeout must be > 0");
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let cpus = std::thread::available_parallelism()
@@ -94,12 +105,7 @@ where
     F: Fn(&Request) -> R + Send + Sync + 'static,
     R: Into<AnyResponse>,
 {
-    assert!(config.pool_size > 0, "pool_size must be > 0");
-    assert!(config.max_header_size > 0, "max_header_size must be > 0");
-    assert!(config.max_body_size > 0, "max_body_size must be > 0");
-    assert!(!config.read_timeout.is_zero(), "read_timeout must be > 0");
-    assert!(!config.idle_timeout.is_zero(), "idle_timeout must be > 0");
-    assert!(!config.write_timeout.is_zero(), "write_timeout must be > 0");
+    config.validate();
 
     let handler = Arc::new(handler);
     let config = Arc::new(config);
