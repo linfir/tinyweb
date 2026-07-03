@@ -121,6 +121,11 @@ impl<'a> Reader<'a> {
 
         let content_length: usize = match head.headers.get("content-length") {
             None => 0,
+            // Strict 1*DIGIT: parse() alone would accept a leading '+',
+            // which proxies may read differently (request smuggling).
+            Some(v) if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) => {
+                return Err(Error::Protocol(StatusCode::BadRequest));
+            }
             Some(v) => match v.parse() {
                 Ok(n) => n,
                 Err(_) => return Err(Error::Protocol(StatusCode::BadRequest)),
@@ -310,6 +315,10 @@ fn parse_head(mut buf: &[u8]) -> Option<Head> {
     let mut headers = HashMap::new();
     while let Some(line) = next_line(&mut buf) {
         let header = Header::parse(line)?;
+        // Duplicate Host headers are a smuggling/poisoning vector.
+        if header.key == "host" && headers.contains_key("host") {
+            return None;
+        }
         let entry = headers.entry(header.key).or_insert_with(String::new);
         if !entry.is_empty() {
             entry.push_str(", ");
@@ -392,9 +401,15 @@ impl Header {
         if key.is_empty() {
             return None;
         }
+        let value = value.trim();
+        // RFC 7230 field-content: no CTLs except HT.
+        // Control bytes in logged values would allow terminal escape injection.
+        if value.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x7f) {
+            return None;
+        }
         Some(Header {
             key: key.to_ascii_lowercase(),
-            value: value.trim().to_string(),
+            value: value.to_string(),
         })
     }
 }
@@ -528,6 +543,28 @@ fn test_parse_rejects_dot_dot_segments() {
 fn test_parse_allows_triple_dot() {
     let req_line = Head::parse(b"GET /foo/.../bar HTTP/1.1").unwrap();
     assert_eq!(req_line.path, "/foo/.../bar");
+}
+
+#[test]
+fn test_header_parse_basic() {
+    let h = Header::parse(b"Content-Type: text/html").unwrap();
+    assert_eq!(h.key, "content-type");
+    assert_eq!(h.value, "text/html");
+}
+
+#[test]
+fn test_header_rejects_control_chars_in_value() {
+    assert!(Header::parse(b"User-Agent: evil\x1b[2Jclear").is_none());
+    assert!(Header::parse(b"User-Agent: evil\x08bs").is_none());
+    assert!(Header::parse(b"User-Agent: evil\x7fdel").is_none());
+    // HT inside the value is allowed
+    assert!(Header::parse(b"User-Agent: a\tb").is_some());
+}
+
+#[test]
+fn test_parse_head_rejects_duplicate_host() {
+    let buf = b"GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n";
+    assert!(parse_head(buf).is_none());
 }
 
 #[test]

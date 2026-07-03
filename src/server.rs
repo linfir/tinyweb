@@ -144,6 +144,14 @@ where
         return;
     };
 
+    // Set before anything (including error responses) is written.
+    if stream
+        .set_write_timeout(Some(config.write_timeout))
+        .is_err()
+    {
+        return;
+    }
+
     let mut rdr = request::Reader::new(config, peer_addr);
     loop {
         let start = Instant::now();
@@ -175,13 +183,6 @@ where
             .map(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")))
             .unwrap_or(false);
         let safe_path = sanitize_path(&req.path);
-
-        if stream
-            .set_write_timeout(Some(config.write_timeout))
-            .is_err()
-        {
-            return;
-        }
 
         let response =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));

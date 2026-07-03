@@ -170,6 +170,34 @@ fn test_post_percent_encoded_form_values() {
 }
 
 #[test]
+fn test_content_length_with_sign_rejected() {
+    let port = start_server(
+        |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
+        Config::default(),
+    );
+
+    let resp = raw_request(
+        port,
+        b"POST /x HTTP/1.1\r\nHost: localhost\r\nContent-Length: +5\r\n\r\nhello",
+    );
+    assert!(status_line(&resp).contains("400"), "response: {}", resp);
+}
+
+#[test]
+fn test_duplicate_host_rejected() {
+    let port = start_server(
+        |_req| Response::ok(tinyweb::ContentType::PLAIN, "ok"),
+        Config::default(),
+    );
+
+    let resp = raw_request(
+        port,
+        b"GET / HTTP/1.1\r\nHost: localhost\r\nHost: evil\r\n\r\n",
+    );
+    assert!(status_line(&resp).contains("400"), "response: {}", resp);
+}
+
+#[test]
 fn test_handler_panic_returns_500() {
     let port = start_server(|_req| panic!("test panic"), Config::default());
 
