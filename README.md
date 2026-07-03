@@ -76,6 +76,7 @@ See the [`examples/`](examples/) directory:
 
 - [`sse.rs`](examples/sse.rs) Server-Sent Events
 - [`routing.rs`](examples/routing.rs) path routing with [`matchit`](https://crates.io/crates/matchit)
+- [`graceful_shutdown.rs`](examples/graceful_shutdown.rs) graceful shutdown via a `/quit` route
 
 ## License
 
