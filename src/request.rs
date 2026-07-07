@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{IpAddr, SocketAddr, TcpStream},
     time::Instant,
 };
 
@@ -35,8 +35,39 @@ pub struct Request {
     /// Only populated when `Content-Type: application/x-www-form-urlencoded`.
     pub form: HashMap<String, Vec<String>>,
     /// The TCP peer address (i.e. the reverse proxy's address, not the client's).
-    /// For the real client IP, read the `x-forwarded-for` or `x-real-ip` header.
+    /// For the real client IP behind a proxy, use [`Request::client_ip`].
     pub peer_addr: SocketAddr,
+}
+
+impl Request {
+    /// Returns the client IP address, honoring `X-Forwarded-For` set by trusted proxies.
+    ///
+    /// If [`Request::peer_addr`] is not in `trusted_proxies`, it is returned as is
+    /// (any `X-Forwarded-For` header is attacker-controlled and ignored).
+    /// Otherwise the `x-forwarded-for` chain is walked from the right,
+    /// skipping trusted proxies; the first untrusted address is the client.
+    /// Unparseable entries stop the walk and the last valid address is returned,
+    /// so a spoofed prefix appended by the client is never trusted.
+    pub fn client_ip(&self, trusted_proxies: &[IpAddr]) -> IpAddr {
+        let peer = self.peer_addr.ip();
+        if !trusted_proxies.contains(&peer) {
+            return peer;
+        }
+        let Some(xff) = self.headers.get("x-forwarded-for") else {
+            return peer;
+        };
+        let mut client = peer;
+        for entry in xff.rsplit(',') {
+            let Ok(ip) = entry.trim().parse::<IpAddr>() else {
+                break;
+            };
+            client = ip;
+            if !trusted_proxies.contains(&ip) {
+                break;
+            }
+        }
+        client
+    }
 }
 
 mod buf {
@@ -622,6 +653,85 @@ fn test_parse_urlencoded_empty_key_skipped() {
 #[test]
 fn test_parse_urlencoded_invalid_percent() {
     assert!(parse_urlencoded(b"key=hello%ZZworld").is_none());
+}
+
+#[cfg(test)]
+fn test_request(peer: &str, xff: Option<&str>) -> Request {
+    let mut headers = HashMap::new();
+    if let Some(v) = xff {
+        headers.insert("x-forwarded-for".to_string(), v.to_string());
+    }
+    Request {
+        id: 0,
+        method: Method::GET,
+        path: "/".to_string(),
+        query: HashMap::new(),
+        headers,
+        body: Vec::new(),
+        form: HashMap::new(),
+        peer_addr: format!("{}:1234", peer).parse().unwrap(),
+    }
+}
+
+#[test]
+fn test_client_ip_untrusted_peer_ignores_xff() {
+    let req = test_request("203.0.113.7", Some("10.0.0.1"));
+    let trusted = ["127.0.0.1".parse().unwrap()];
+    assert_eq!(
+        req.client_ip(&trusted),
+        "203.0.113.7".parse::<IpAddr>().unwrap()
+    );
+}
+
+#[test]
+fn test_client_ip_trusted_peer_uses_xff() {
+    let req = test_request("127.0.0.1", Some("203.0.113.7"));
+    let trusted = ["127.0.0.1".parse().unwrap()];
+    assert_eq!(
+        req.client_ip(&trusted),
+        "203.0.113.7".parse::<IpAddr>().unwrap()
+    );
+}
+
+#[test]
+fn test_client_ip_skips_trusted_chain() {
+    let req = test_request("127.0.0.1", Some("203.0.113.7, 10.0.0.2"));
+    let trusted = ["127.0.0.1".parse().unwrap(), "10.0.0.2".parse().unwrap()];
+    assert_eq!(
+        req.client_ip(&trusted),
+        "203.0.113.7".parse::<IpAddr>().unwrap()
+    );
+}
+
+#[test]
+fn test_client_ip_spoofed_prefix_not_trusted() {
+    // client sent "1.2.3.4," itself; proxy appended the real IP
+    let req = test_request("127.0.0.1", Some("1.2.3.4, 203.0.113.7"));
+    let trusted = ["127.0.0.1".parse().unwrap()];
+    assert_eq!(
+        req.client_ip(&trusted),
+        "203.0.113.7".parse::<IpAddr>().unwrap()
+    );
+}
+
+#[test]
+fn test_client_ip_garbage_stops_walk() {
+    let req = test_request("127.0.0.1", Some("garbage, 203.0.113.7"));
+    let trusted = ["127.0.0.1".parse().unwrap()];
+    assert_eq!(
+        req.client_ip(&trusted),
+        "203.0.113.7".parse::<IpAddr>().unwrap()
+    );
+}
+
+#[test]
+fn test_client_ip_no_xff_returns_peer() {
+    let req = test_request("127.0.0.1", None);
+    let trusted = ["127.0.0.1".parse().unwrap()];
+    assert_eq!(
+        req.client_ip(&trusted),
+        "127.0.0.1".parse::<IpAddr>().unwrap()
+    );
 }
 
 #[test]
