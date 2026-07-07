@@ -182,7 +182,7 @@ where
             .get("connection")
             .map(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")))
             .unwrap_or(false);
-        let safe_path = sanitize_path(&req.path);
+        let safe_path = sanitize_field(&req.path);
 
         let response =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| req_handler(&req).into()));
@@ -200,8 +200,8 @@ where
                         &req_line,
                         status.as_u16(),
                         0,
-                        referer,
-                        ua,
+                        &referer,
+                        &ua,
                         Some(start.elapsed().as_millis()),
                     );
                 }
@@ -232,8 +232,8 @@ where
                         &req_line,
                         status.as_u16(),
                         bytes,
-                        referer,
-                        ua,
+                        &referer,
+                        &ua,
                         Some(start.elapsed().as_millis()),
                     );
                 }
@@ -255,8 +255,8 @@ where
                         &req_line,
                         StatusCode::Ok.as_u16(),
                         "-",
-                        referer,
-                        ua,
+                        &referer,
+                        &ua,
                         None,
                     );
                 }
@@ -277,18 +277,14 @@ where
     }
 }
 
-fn clf_headers(req: &Request) -> (&str, &str) {
-    let referer = req
-        .headers
-        .get("referer")
-        .map(|s| s.as_str())
-        .unwrap_or("-");
-    let ua = req
-        .headers
-        .get("user-agent")
-        .map(|s| s.as_str())
-        .unwrap_or("-");
-    (referer, ua)
+fn clf_headers(req: &Request) -> (String, String) {
+    let get = |key| {
+        req.headers
+            .get(key)
+            .map(|s| sanitize_field(s))
+            .unwrap_or_else(|| "-".to_string())
+    };
+    (get("referer"), get("user-agent"))
 }
 
 fn clf_request_line(method: &str, path: &str) -> String {
@@ -331,16 +327,27 @@ fn log_clf(
     }
 }
 
-fn sanitize_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for b in path.bytes() {
-        if b.is_ascii() && !b.is_ascii_control() {
+// Escapes bytes that could forge log fields: controls, non-ASCII,
+// and the CLF quoting characters '"' and '\'.
+fn sanitize_field(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii() && !b.is_ascii_control() && b != b'"' && b != b'\\' {
             out.push(b as char);
         } else {
             out.push_str(&format!("\\x{:02X}", b));
         }
     }
     out
+}
+
+#[test]
+fn test_sanitize_field() {
+    assert_eq!(sanitize_field("/foo?a=1"), "/foo?a=1");
+    assert_eq!(sanitize_field("a\" 200 \"b"), "a\\x22 200 \\x22b");
+    assert_eq!(sanitize_field("a\\x22"), "a\\x5Cx22");
+    assert_eq!(sanitize_field("e\u{1b}[2J"), "e\\x1B[2J");
+    assert_eq!(sanitize_field("caf\u{e9}"), "caf\\xC3\\xA9");
 }
 
 fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
