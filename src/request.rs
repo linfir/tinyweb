@@ -18,7 +18,7 @@ pub struct Request {
     pub method: Method,
     /// The percent-decoded request path (e.g. `/foo/bar`).
     pub path: String,
-    /// Parsed query-string parameters, percent-decoded.
+    /// Parsed query-string parameters, percent-decoded; `+` is treated as a space.
     /// If a key appears more than once, all values are collected in order.
     pub query: HashMap<String, Vec<String>>,
     /// Request headers.
@@ -173,7 +173,7 @@ impl<'a> Reader<'a> {
                 .unwrap_or(false);
 
             if is_form {
-                match parse_urlencoded(body, true) {
+                match parse_urlencoded(body) {
                     Some(map) => req.form = map,
                     None => return Err(Error::Protocol(StatusCode::BadRequest)),
                 }
@@ -374,7 +374,7 @@ impl Head {
             return None;
         }
 
-        let query = parse_urlencoded(query, false)?;
+        let query = parse_urlencoded(query)?;
 
         Some(Head {
             method,
@@ -414,7 +414,8 @@ impl Header {
     }
 }
 
-fn parse_urlencoded(input: &[u8], plus_as_space: bool) -> Option<HashMap<String, Vec<String>>> {
+// application/x-www-form-urlencoded; `+` decodes to a space (WHATWG URL).
+fn parse_urlencoded(input: &[u8]) -> Option<HashMap<String, Vec<String>>> {
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for pair in input.split(|&b| b == b'&') {
         let mut parts = pair.splitn(2, |&b| b == b'=');
@@ -423,15 +424,15 @@ fn parse_urlencoded(input: &[u8], plus_as_space: bool) -> Option<HashMap<String,
         if key.is_empty() {
             continue;
         }
-        let key = decode_field(key, plus_as_space)?;
-        let value = decode_field(value, plus_as_space)?;
+        let key = decode_field(key)?;
+        let value = decode_field(value)?;
         map.entry(key).or_default().push(value);
     }
     Some(map)
 }
 
-fn decode_field(input: &[u8], plus_as_space: bool) -> Option<String> {
-    if plus_as_space && input.contains(&b'+') {
+fn decode_field(input: &[u8]) -> Option<String> {
+    if input.contains(&b'+') {
         let replaced: Vec<u8> = input
             .iter()
             .map(|&b| if b == b'+' { b' ' } else { b })
@@ -477,6 +478,15 @@ fn test_parse_get_with_query() {
     assert_eq!(req_line.path, "/search");
     assert_eq!(req_line.query["q"], ["rust"]);
     assert_eq!(req_line.query["lang"], ["en"]);
+}
+
+#[test]
+fn test_parse_query_plus_as_space() {
+    let req_line = Head::parse(b"GET /search?q=hello+world HTTP/1.1").unwrap();
+    assert_eq!(req_line.query["q"], ["hello world"]);
+    // '+' in the path stays literal
+    let req_line = Head::parse(b"GET /a+b HTTP/1.1").unwrap();
+    assert_eq!(req_line.path, "/a+b");
 }
 
 #[test]
@@ -569,55 +579,49 @@ fn test_parse_head_rejects_duplicate_host() {
 
 #[test]
 fn test_parse_urlencoded_basic() {
-    let map = parse_urlencoded(b"name=Alice&age=30", false).unwrap();
+    let map = parse_urlencoded(b"name=Alice&age=30").unwrap();
     assert_eq!(map["name"], ["Alice"]);
     assert_eq!(map["age"], ["30"]);
 }
 
 #[test]
 fn test_parse_urlencoded_plus_as_space() {
-    let map = parse_urlencoded(b"greeting=hello+world", true).unwrap();
+    let map = parse_urlencoded(b"greeting=hello+world").unwrap();
     assert_eq!(map["greeting"], ["hello world"]);
 }
 
 #[test]
-fn test_parse_urlencoded_plus_literal_without_flag() {
-    let map = parse_urlencoded(b"greeting=hello+world", false).unwrap();
-    assert_eq!(map["greeting"], ["hello+world"]);
-}
-
-#[test]
 fn test_parse_urlencoded_percent_encoded() {
-    let map = parse_urlencoded(b"city=San%20Francisco", true).unwrap();
+    let map = parse_urlencoded(b"city=San%20Francisco").unwrap();
     assert_eq!(map["city"], ["San Francisco"]);
 }
 
 #[test]
 fn test_parse_urlencoded_repeated_key() {
-    let map = parse_urlencoded(b"tag=a&tag=b&tag=c", false).unwrap();
+    let map = parse_urlencoded(b"tag=a&tag=b&tag=c").unwrap();
     assert_eq!(map["tag"], ["a", "b", "c"]);
 }
 
 #[test]
 fn test_parse_urlencoded_empty_value() {
-    let map = parse_urlencoded(b"key=", false).unwrap();
+    let map = parse_urlencoded(b"key=").unwrap();
     assert_eq!(map["key"], [""]);
 }
 
 #[test]
 fn test_parse_urlencoded_empty_key_skipped() {
-    let map = parse_urlencoded(b"=value&real=yes", false).unwrap();
+    let map = parse_urlencoded(b"=value&real=yes").unwrap();
     assert!(!map.contains_key(""));
     assert_eq!(map["real"], ["yes"]);
 }
 
 #[test]
 fn test_parse_urlencoded_invalid_percent() {
-    assert!(parse_urlencoded(b"key=hello%ZZworld", false).is_none());
+    assert!(parse_urlencoded(b"key=hello%ZZworld").is_none());
 }
 
 #[test]
 fn test_parse_urlencoded_empty_input() {
-    let map = parse_urlencoded(b"", false).unwrap();
+    let map = parse_urlencoded(b"").unwrap();
     assert!(map.is_empty());
 }
