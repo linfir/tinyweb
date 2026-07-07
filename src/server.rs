@@ -1,7 +1,10 @@
 use std::{
     fmt,
     net::{TcpListener, TcpStream},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -71,6 +74,9 @@ impl Default for Config {
         }
     }
 }
+
+// Process-wide request id counter; ids end access log lines as #id.
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 enum AnyResponseImpl {
     Regular(Response),
@@ -158,7 +164,8 @@ where
     loop {
         let start = Instant::now();
         let recv_date = Date::now();
-        let req = match rdr.read(&mut stream) {
+        let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let req = match rdr.read(&mut stream, id) {
             Ok(r) => r,
             Err(request::Error::Closed) => return,
             Err(request::Error::Protocol(status)) => {
@@ -172,6 +179,7 @@ where
                         "-",
                         "-",
                         Some(start.elapsed().as_millis()),
+                        id,
                     );
                 }
                 send_error(&mut stream, status);
@@ -205,6 +213,7 @@ where
                         &referer,
                         &ua,
                         Some(start.elapsed().as_millis()),
+                        req.id,
                     );
                 }
                 send_error(&mut stream, status);
@@ -237,6 +246,7 @@ where
                         &referer,
                         &ua,
                         Some(start.elapsed().as_millis()),
+                        req.id,
                     );
                 }
                 if !keep_alive {
@@ -260,6 +270,7 @@ where
                         &referer,
                         &ua,
                         None,
+                        req.id,
                     );
                 }
                 let mut writer = SseWriter::new(stream);
@@ -272,11 +283,12 @@ where
                 }
                 if config.access_log {
                     log::info!(
-                        "{} {} {} SSE closed {}ms",
+                        "{} {} {} SSE closed {}ms #{}",
                         peer_addr,
                         req.method.as_str(),
                         safe_path,
                         start.elapsed().as_millis(),
+                        req.id,
                     );
                 }
                 return;
@@ -309,10 +321,11 @@ fn log_clf(
     referer: &str,
     ua: &str,
     ms: Option<u128>,
+    id: u64,
 ) {
     match ms {
         Some(ms) => log::info!(
-            "{} - - {} \"{}\" {} {} \"{}\" \"{}\" {}ms",
+            "{} - - {} \"{}\" {} {} \"{}\" \"{}\" {}ms #{}",
             peer,
             date.clf(),
             request,
@@ -320,17 +333,19 @@ fn log_clf(
             bytes,
             referer,
             ua,
-            ms
+            ms,
+            id
         ),
         None => log::info!(
-            "{} - - {} \"{}\" {} {} \"{}\" \"{}\"",
+            "{} - - {} \"{}\" {} {} \"{}\" \"{}\" #{}",
             peer,
             date.clf(),
             request,
             status,
             bytes,
             referer,
-            ua
+            ua,
+            id
         ),
     }
 }

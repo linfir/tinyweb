@@ -14,6 +14,9 @@ use crate::{
 /// An incoming HTTP request.
 #[non_exhaustive]
 pub struct Request {
+    /// Unique request id (process-wide counter).
+    /// Access log lines end with `#id`; include it in handler logs to correlate.
+    pub id: u64,
     /// The HTTP method.
     pub method: Method,
     /// The percent-decoded request path (e.g. `/foo/bar`).
@@ -109,7 +112,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    pub(crate) fn read(&mut self, stream: &mut TcpStream) -> Result<Request> {
+    pub(crate) fn read(&mut self, stream: &mut TcpStream, id: u64) -> Result<Request> {
         let (idx, deadline) = self.read_head(stream)?;
 
         let head = parse_head(&self.buf.data()[..idx + 2])
@@ -135,6 +138,7 @@ impl<'a> Reader<'a> {
         self.buf.consume(idx + 4);
 
         let mut req = Request {
+            id,
             method: head.method,
             path: head.path,
             query: head.query,
