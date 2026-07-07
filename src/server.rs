@@ -129,6 +129,8 @@ where
             }
             Err(e) => {
                 log::error!("Cannot establish connection: {}", e);
+                // Avoid spinning hot when accept fails repeatedly (e.g. EMFILE).
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
