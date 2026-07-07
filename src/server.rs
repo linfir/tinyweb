@@ -263,7 +263,13 @@ where
                     );
                 }
                 let mut writer = SseWriter::new(stream);
-                sse_handler(&mut writer);
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sse_handler(&mut writer)
+                }))
+                .is_err()
+                {
+                    log::error!("handler panicked");
+                }
                 if config.access_log {
                     log::info!(
                         "{} {} {} SSE closed {}ms",
