@@ -109,8 +109,19 @@ impl Response {
         self.status_code
     }
 
+    // 1xx, 204, and 304 responses must not carry a body; sending one would
+    // desync keep-alive clients (RFC 9110 s6.4.1).
+    fn is_bodiless(&self) -> bool {
+        let code = self.status_code.as_u16();
+        matches!(code, 100..=199 | 204 | 304)
+    }
+
     pub(crate) fn body_len(&self) -> usize {
-        self.body.len()
+        if self.is_bodiless() {
+            0
+        } else {
+            self.body.len()
+        }
     }
 
     /// Send the response over the given TCP stream.
@@ -138,7 +149,14 @@ impl Response {
         for (name, value) in &self.headers {
             write!(w, "{}: {}\r\n", name.as_str(), value.as_str())?;
         }
-        write!(w, "Content-Length: {}\r\n", self.body.len())?;
+        let send_body = send_body && !self.is_bodiless();
+        if self.is_bodiless() {
+            if !self.body.is_empty() {
+                log::warn!("dropping body of {} response", self.status_code.as_u16());
+            }
+        } else {
+            write!(w, "Content-Length: {}\r\n", self.body.len())?;
+        }
         if let Some(timeout) = keep_alive {
             write!(w, "Connection: keep-alive\r\n")?;
             if !timeout.is_zero() {

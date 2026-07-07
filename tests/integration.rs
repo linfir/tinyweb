@@ -198,6 +198,43 @@ fn test_duplicate_host_rejected() {
 }
 
 #[test]
+fn test_204_suppresses_body_and_content_length() {
+    let port = start_server(
+        |_req| {
+            Response::new()
+                .with_status(tinyweb::StatusCode::NoContent)
+                .with_body(tinyweb::ContentType::PLAIN, "leak")
+        },
+        Config::default(),
+    );
+
+    let resp = raw_request(port, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(status_line(&resp).contains("204"), "response: {}", resp);
+    assert!(
+        !resp.to_lowercase().contains("content-length"),
+        "response: {}",
+        resp
+    );
+    assert!(!resp.contains("leak"), "response: {}", resp);
+}
+
+#[test]
+fn test_304_suppresses_body_and_content_length() {
+    let port = start_server(
+        |_req| Response::error(tinyweb::StatusCode::NotModified),
+        Config::default(),
+    );
+
+    let resp = raw_request(port, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(status_line(&resp).contains("304"), "response: {}", resp);
+    assert!(
+        !resp.to_lowercase().contains("content-length"),
+        "response: {}",
+        resp
+    );
+}
+
+#[test]
 fn test_handler_panic_returns_500() {
     let port = start_server(|_req| panic!("test panic"), Config::default());
 
