@@ -15,6 +15,8 @@ use crate::{date::Date, generated::Method, request::Request};
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 // How long close() waits for the peer's Close echo.
 const CLOSE_DRAIN: Duration = Duration::from_secs(1);
+// A quiet period this long ends the post-close drain early.
+const CLOSE_IDLE: Duration = Duration::from_millis(250);
 
 impl Request {
     /// Returns `true` if this request asks for a WebSocket upgrade (RFC 6455).
@@ -36,6 +38,22 @@ impl Request {
                 .headers
                 .get("sec-websocket-key")
                 .is_some_and(|k| valid_key(k))
+    }
+}
+
+// RFC 6455 s7.4 close codes acceptable on the wire; 1004-1006 are reserved,
+// 1012-1014 are IANA-registered, 3000-4999 are application-defined.
+fn valid_close_code(code: u16) -> bool {
+    matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999)
+}
+
+#[test]
+fn test_valid_close_code() {
+    for code in [1000, 1001, 1002, 1003, 1007, 1011, 1012, 1014, 3000, 4999] {
+        assert!(valid_close_code(code), "{}", code);
+    }
+    for code in [0, 999, 1004, 1005, 1006, 1015, 1016, 1100, 2000, 2999, 5000] {
+        assert!(!valid_close_code(code), "{}", code);
     }
 }
 
@@ -524,13 +542,18 @@ impl WebSocket {
     // Reads and discards whatever the client still has in flight, so the
     // socket closes with FIN (not RST) and the Close frame reaches the
     // client.  The stream may be mid-frame here, so bytes, not frames.
+    // Stops at EOF, after a quiet period, or at a hard cap.
     fn discard_incoming(&mut self) {
         let deadline = Instant::now() + CLOSE_DRAIN;
         let mut buf = [0u8; 4096];
         let stream = &*self.stream;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
+            if remaining.is_zero()
+                || stream
+                    .set_read_timeout(Some(remaining.min(CLOSE_IDLE)))
+                    .is_err()
+            {
                 return;
             }
             let mut s = stream;
@@ -551,17 +574,29 @@ impl WebSocket {
         send_frame(&mut s, Opcode::Pong, data, true).map_err(Error::Io)
     }
 
-    // The peer sent Close first: echo its status code back.
+    // The peer sent Close first: validate the payload, echo its status code.
     fn finish_close(&mut self, payload: &[u8]) -> Result<(), Error> {
         let code = match payload.len() {
             0 => 1000,
             1 => return Err(Error::InvalidFrame),
-            _ => u16::from_be_bytes([payload[0], payload[1]]),
+            _ => {
+                let code = u16::from_be_bytes([payload[0], payload[1]]);
+                if !valid_close_code(code) {
+                    return Err(Error::InvalidFrame);
+                }
+                if std::str::from_utf8(&payload[2..]).is_err() {
+                    return Err(Error::InvalidUtf8);
+                }
+                code
+            }
         };
         if !self.closed {
             self.send_close(code)?;
         }
         self.closed = true;
+        // The client may pipeline frames behind its Close; drain them so the
+        // socket closes with FIN, not RST.
+        self.discard_incoming();
         Ok(())
     }
 

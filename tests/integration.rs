@@ -456,6 +456,30 @@ fn test_ws_echo_and_close_handshake() {
 }
 
 #[test]
+fn test_ws_close_with_empty_payload() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let mut stream = ws_connect(port);
+
+    stream.write_all(&ws_client_frame(0x88, b"")).unwrap();
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x88);
+    assert_eq!(data, 1000u16.to_be_bytes());
+}
+
+#[test]
+fn test_ws_close_with_invalid_code_gets_1002() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let mut stream = ws_connect(port);
+
+    stream
+        .write_all(&ws_client_frame(0x88, &999u16.to_be_bytes()))
+        .unwrap();
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x88);
+    assert_eq!(data, 1002u16.to_be_bytes());
+}
+
+#[test]
 fn test_ws_fragmented_message_with_interleaved_ping() {
     let (port, _stop_tx, _join) = ws_echo_server(Config::default());
     let mut stream = ws_connect(port);
