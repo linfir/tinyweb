@@ -65,6 +65,10 @@ impl Config {
         assert!(!self.read_timeout.is_zero(), "read_timeout must be > 0");
         assert!(!self.idle_timeout.is_zero(), "idle_timeout must be > 0");
         assert!(!self.write_timeout.is_zero(), "write_timeout must be > 0");
+        assert!(
+            self.shutdown_timeout.is_none_or(|t| !t.is_zero()),
+            "shutdown_timeout must be > 0; use None to wait indefinitely"
+        );
     }
 }
 
@@ -605,6 +609,16 @@ fn sanitize_field(s: &str) -> String {
         }
     }
     out
+}
+
+#[test]
+#[should_panic(expected = "shutdown_timeout must be > 0")]
+fn test_validate_rejects_zero_shutdown_timeout() {
+    let config = Config {
+        shutdown_timeout: Some(Duration::ZERO),
+        ..Config::default()
+    };
+    config.validate();
 }
 
 #[test]
