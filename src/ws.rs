@@ -32,8 +32,31 @@ impl Request {
                 .headers
                 .get("sec-websocket-version")
                 .is_some_and(|v| v == "13")
-            && self.headers.contains_key("sec-websocket-key")
+            && self
+                .headers
+                .get("sec-websocket-key")
+                .is_some_and(|k| valid_key(k))
     }
+}
+
+// A nonce of 16 bytes, base64-encoded: 22 base64 chars plus "==".
+fn valid_key(key: &str) -> bool {
+    let b = key.as_bytes();
+    b.len() == 24
+        && b[22] == b'='
+        && b[23] == b'='
+        && b[..22]
+            .iter()
+            .all(|&c| c.is_ascii_alphanumeric() || c == b'+' || c == b'/')
+}
+
+#[test]
+fn test_valid_key() {
+    assert!(valid_key("dGhlIHNhbXBsZSBub25jZQ=="));
+    assert!(!valid_key(""));
+    assert!(!valid_key("dGhlIHNhbXBsZSBub25jZQ=")); // 23 chars
+    assert!(!valid_key("dGhlIHNhbXBsZSBub25jZQview")); // no padding
+    assert!(!valid_key("dGhlIHNhbXBsZSBub25j...==")); // invalid chars
 }
 
 /// A WebSocket upgrade response.
@@ -43,7 +66,13 @@ impl WsResponse {
     /// `handler` is called synchronously on the connection thread after the
     /// 101 handshake; the connection closes when it returns.
     /// If the request is not [`Request::upgradable`], a
-    /// [`crate::StatusCode::BadRequest`] response is sent instead.
+    /// [`crate::StatusCode::BadRequest`] (or, on a version mismatch,
+    /// [`crate::StatusCode::UpgradeRequired`]) response is sent instead.
+    ///
+    /// Subprotocols (`Sec-WebSocket-Protocol`) are not negotiated: the
+    /// handshake omits the header, telling the client no subprotocol is
+    /// selected.
+    /// Extensions such as permessage-deflate are likewise not negotiated.
     pub fn new<F>(handler: F) -> Self
     where
         F: FnOnce(&mut WebSocket) + Send + 'static,
