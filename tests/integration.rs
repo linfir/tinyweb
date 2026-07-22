@@ -507,6 +507,23 @@ fn test_ws_non_upgrade_request_gets_400() {
 }
 
 #[test]
+fn test_ws_version_mismatch_gets_426() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let resp = raw_request(
+        port,
+        b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+          Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+          Sec-WebSocket-Version: 8\r\n\r\n",
+    );
+    assert!(status_line(&resp).contains("426"), "response: {}", resp);
+    assert!(
+        resp.contains("Sec-WebSocket-Version: 13"),
+        "response: {}",
+        resp
+    );
+}
+
+#[test]
 fn test_ws_shutdown_sends_going_away() {
     let (port, stop_tx, join) = ws_echo_server(Config::default());
     let mut stream = ws_connect(port);

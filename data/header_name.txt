@@ -13,3 +13,4 @@ Strict-Transport-Security
 X-Content-Type-Options
 X-Frame-Options
 Referrer-Policy
+Sec-WebSocket-Version

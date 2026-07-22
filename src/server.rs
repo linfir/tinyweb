@@ -16,7 +16,7 @@ use crate::{
     response::Response,
     sse::{SseResponse, SseWriter, send_sse_headers},
     threadpool::ThreadPool,
-    types::{Method, StatusCode},
+    types::{HeaderName, HeaderValue, Method, StatusCode},
     ws::{WebSocket, WsResponse, send_upgrade_headers},
 };
 
@@ -568,7 +568,25 @@ fn handle_stream<F, R>(
                     .then(|| req.headers.get("sec-websocket-key"))
                     .flatten();
                 let Some(key) = key else {
-                    let status = StatusCode::BadRequest;
+                    // RFC 6455 s4.2.2: a version mismatch gets 426 plus the
+                    // version the server speaks; anything else is a 400.
+                    let wants_ws = req
+                        .headers
+                        .get("upgrade")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+                    let version_ok = req
+                        .headers
+                        .get("sec-websocket-version")
+                        .is_some_and(|v| v == "13");
+                    let resp = if wants_ws && !version_ok {
+                        Response::error(StatusCode::UpgradeRequired).with_header(
+                            HeaderName::SEC_WEBSOCKET_VERSION,
+                            HeaderValue::from_static("13").expect("valid header value"),
+                        )
+                    } else {
+                        Response::error(StatusCode::BadRequest)
+                    };
+                    let status = resp.status_code();
                     if config.access_log {
                         let (referer, ua) = clf_headers(&req);
                         let req_line = clf_request_line(req.method.as_str(), &safe_path);
@@ -584,7 +602,7 @@ fn handle_stream<F, R>(
                             req.id,
                         );
                     }
-                    send_error(&stream, status);
+                    let _ = resp.send(&stream, None, true, &recv_date);
                     return;
                 };
                 if let Err(e) = send_upgrade_headers(&stream, key, &recv_date) {

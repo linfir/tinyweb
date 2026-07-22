@@ -391,6 +391,7 @@ pub(crate) enum HeaderNameInner {
     XContentTypeOptions,
     XFrameOptions,
     ReferrerPolicy,
+    SecWebSocketVersion,
     Custom(String),
 }
 
@@ -412,6 +413,7 @@ impl HeaderNameInner {
             Self::XContentTypeOptions => "X-Content-Type-Options",
             Self::XFrameOptions => "X-Frame-Options",
             Self::ReferrerPolicy => "Referrer-Policy",
+            Self::SecWebSocketVersion => "Sec-WebSocket-Version",
             Self::Custom(s) => s.as_str(),
         }
     }
@@ -458,4 +460,6 @@ impl HeaderName {
     pub const X_FRAME_OPTIONS: Self = HeaderName(HeaderNameInner::XFrameOptions);
     /// The `Referrer-Policy` header.
     pub const REFERRER_POLICY: Self = HeaderName(HeaderNameInner::ReferrerPolicy);
+    /// The `Sec-WebSocket-Version` header.
+    pub const SEC_WEBSOCKET_VERSION: Self = HeaderName(HeaderNameInner::SecWebSocketVersion);
 }
