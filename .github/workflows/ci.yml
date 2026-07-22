@@ -7,4 +7,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo check
       - if: github.ref == 'refs/heads/main'
+        run: python3 gen_date_tests.py > src/date_test_cases.txt
+      - if: github.ref == 'refs/heads/main'
         run: cargo test
