@@ -20,5 +20,5 @@ pub use crate::{
     server::{AnyResponse, Config, serve, serve_graceful},
     sse::{SseResponse, SseWriter},
     types::*,
-    ws::{Message, WebSocket, WsResponse},
+    ws::{Message, Recv, WebSocket, WsResponse},
 };

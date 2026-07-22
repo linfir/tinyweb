@@ -53,6 +53,10 @@ pub struct Config {
     /// detached threads and are killed at process exit.
     /// Default: `Some(2 seconds)`.
     pub shutdown_timeout: Option<Duration>,
+    /// Maximum WebSocket message size in bytes.
+    /// A larger message closes the connection with status 1009.
+    /// Default: 1048576 (1 MB).
+    pub max_ws_message_size: usize,
     /// Emit a `log::info!` line for every completed request (peer IP, method, path, status, latency).
     /// Default: `true`.
     pub access_log: bool,
@@ -69,6 +73,10 @@ impl Config {
         assert!(
             self.shutdown_timeout.is_none_or(|t| !t.is_zero()),
             "shutdown_timeout must be > 0; use None to wait indefinitely"
+        );
+        assert!(
+            self.max_ws_message_size > 0,
+            "max_ws_message_size must be > 0"
         );
     }
 }
@@ -88,6 +96,7 @@ impl Default for Config {
             shutdown_timeout: Some(Duration::from_secs(2)),
             max_body_size: 64 * 1024,
             max_header_size: 8 * 1024,
+            max_ws_message_size: 1024 * 1024,
             access_log: true,
         }
     }
@@ -589,14 +598,18 @@ fn handle_stream<F, R>(
                         peer_addr, &recv_date, &req_line, 101, "-", &referer, &ua, None, req.id,
                     );
                 }
-                let Ok(mut ws) = WebSocket::new(stream) else {
-                    return;
-                };
+                let mut ws = WebSocket::new(
+                    stream,
+                    shutdown.clone(),
+                    config.read_timeout,
+                    config.max_ws_message_size,
+                );
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ws_handler(&mut ws)))
                     .is_err()
                 {
                     log::error!("handler panicked");
                 }
+                let _ = ws.close();
                 if config.access_log {
                     log::info!(
                         "{} {} {} WS closed {}ms #{}",

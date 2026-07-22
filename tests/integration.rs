@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use tinyweb::{AnyResponse, Config, Method, Request, Response, SseResponse};
+use tinyweb::{AnyResponse, Config, Message, Method, Request, Response, SseResponse, WsResponse};
 
 fn start_server<F>(handler: F, config: Config) -> u16
 where
@@ -361,6 +361,176 @@ fn test_shutdown_drains_sse() {
     // The handler polls is_shutdown, so the drain must beat the 2s timeout.
     assert!(
         start.elapsed() < Duration::from_secs(1),
+        "shutdown took {:?}",
+        start.elapsed()
+    );
+}
+
+// Performs the client half of a WebSocket handshake; panics on failure.
+fn ws_connect(port: u16) -> TcpStream {
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(
+            b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+              Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+              Sec-WebSocket-Version: 13\r\n\r\n",
+        )
+        .unwrap();
+    let mut headers = Vec::new();
+    let mut byte = [0u8; 1];
+    while !headers.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).unwrap();
+        headers.push(byte[0]);
+    }
+    let headers = String::from_utf8(headers).unwrap();
+    assert!(headers.starts_with("HTTP/1.1 101"), "headers: {}", headers);
+    assert!(
+        headers.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+        "headers: {}",
+        headers
+    );
+    stream
+}
+
+// Builds a masked client frame; first_byte carries fin and the opcode.
+fn ws_client_frame(first_byte: u8, payload: &[u8]) -> Vec<u8> {
+    let key = [0x11u8, 0x22, 0x33, 0x44];
+    let mut frame = vec![first_byte];
+    assert!(
+        payload.len() < 126,
+        "test helper supports short frames only"
+    );
+    frame.push(0x80 | payload.len() as u8);
+    frame.extend_from_slice(&key);
+    frame.extend(payload.iter().enumerate().map(|(i, &b)| b ^ key[i % 4]));
+    frame
+}
+
+// Reads one (unmasked, short) server frame.
+fn ws_read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).unwrap();
+    assert_eq!(head[1] & 0x80, 0, "server frames must be unmasked");
+    let len = (head[1] & 0x7F) as usize;
+    assert!(len < 126, "test helper supports short frames only");
+    let mut data = vec![0u8; len];
+    stream.read_exact(&mut data).unwrap();
+    (head[0], data)
+}
+
+fn ws_echo_server(config: Config) -> (u16, mpsc::Sender<()>, JoinHandle<()>) {
+    start_server_graceful(
+        |_req| {
+            WsResponse::new(|ws| {
+                while let Ok(Some(msg)) = ws.recv() {
+                    if ws.send(msg).is_err() {
+                        break;
+                    }
+                }
+            })
+        },
+        config,
+    )
+}
+
+#[test]
+fn test_ws_echo_and_close_handshake() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let mut stream = ws_connect(port);
+
+    stream.write_all(&ws_client_frame(0x81, b"hello")).unwrap();
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x81);
+    assert_eq!(data, b"hello");
+
+    // Client-initiated close: expect the echo with the same status code.
+    stream
+        .write_all(&ws_client_frame(0x88, &1000u16.to_be_bytes()))
+        .unwrap();
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x88);
+    assert_eq!(data, 1000u16.to_be_bytes());
+}
+
+#[test]
+fn test_ws_fragmented_message_with_interleaved_ping() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let mut stream = ws_connect(port);
+
+    stream.write_all(&ws_client_frame(0x01, b"Hel")).unwrap(); // text, no fin
+    stream.write_all(&ws_client_frame(0x89, b"pp")).unwrap(); // ping between fragments
+    stream.write_all(&ws_client_frame(0x80, b"lo")).unwrap(); // continuation, fin
+
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x8A, "expected pong");
+    assert_eq!(data, b"pp");
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x81);
+    assert_eq!(data, b"Hello");
+}
+
+#[test]
+fn test_ws_unmasked_frame_closes_1002() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let mut stream = ws_connect(port);
+
+    stream.write_all(&[0x81, 0x05]).unwrap();
+    stream.write_all(b"hello").unwrap();
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x88);
+    assert_eq!(data, 1002u16.to_be_bytes());
+}
+
+#[test]
+fn test_ws_oversized_message_closes_1009() {
+    let mut config = Config::default();
+    config.max_ws_message_size = 64;
+    let (port, _stop_tx, _join) = ws_echo_server(config);
+    let mut stream = ws_connect(port);
+
+    stream
+        .write_all(&ws_client_frame(0x82, &[0u8; 100]))
+        .unwrap();
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x88);
+    assert_eq!(data, 1009u16.to_be_bytes());
+}
+
+#[test]
+fn test_ws_non_upgrade_request_gets_400() {
+    let (port, _stop_tx, _join) = ws_echo_server(Config::default());
+    let resp = raw_request(port, b"GET /ws HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(status_line(&resp).contains("400"), "response: {}", resp);
+}
+
+#[test]
+fn test_ws_shutdown_sends_going_away() {
+    let (port, stop_tx, join) = ws_echo_server(Config::default());
+    let mut stream = ws_connect(port);
+
+    // Confirm the connection is live, then trigger the shutdown.
+    stream.write_all(&ws_client_frame(0x81, b"hi")).unwrap();
+    let (_, data) = ws_read_frame(&mut stream);
+    assert_eq!(data, b"hi");
+
+    let start = std::time::Instant::now();
+    stop_tx.send(()).unwrap();
+
+    // recv() polls the shutdown flag and closes with 1001 Going Away.
+    let (b0, data) = ws_read_frame(&mut stream);
+    assert_eq!(b0, 0x88);
+    assert_eq!(data, 1001u16.to_be_bytes());
+    // Echo the close so the server's drain completes promptly.
+    stream
+        .write_all(&ws_client_frame(0x88, &1001u16.to_be_bytes()))
+        .unwrap();
+
+    join.join().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
         "shutdown took {:?}",
         start.elapsed()
     );
