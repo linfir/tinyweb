@@ -199,6 +199,8 @@ impl From<SseResponse> for AnyResponse {
 /// Pool size and timeouts are controlled by `config`; use [`Config::default`] for sensible defaults.
 ///
 /// For HEAD requests, the handler is called normally but the response body is not sent.
+/// If the handler returns an [`SseResponse`], only the SSE headers are sent
+/// and the stream handler is not invoked.
 ///
 /// Panics if any `config` field is zero.
 pub fn serve<F, R>(listener: TcpListener, config: Config, handler: F) -> !
@@ -518,6 +520,10 @@ fn handle_stream<F, R>(
                         None,
                         req.id,
                     );
+                }
+                // HEAD gets the SSE headers only; the stream handler is not invoked.
+                if req.method == Method::HEAD {
+                    return;
                 }
                 let mut writer = SseWriter::new(stream, shutdown.clone());
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

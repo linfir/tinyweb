@@ -14,6 +14,7 @@ pub struct SseResponse(pub(crate) Box<dyn FnOnce(&mut SseWriter) + Send + 'stati
 
 impl SseResponse {
     /// `handler` is called synchronously on the connection thread; the connection closes when it returns.
+    /// For HEAD requests, only the SSE headers are sent and `handler` is not invoked.
     pub fn new<F>(handler: F) -> Self
     where
         F: FnOnce(&mut SseWriter) + Send + 'static,

@@ -367,6 +367,24 @@ fn test_shutdown_drains_sse() {
 }
 
 #[test]
+fn test_head_sse_sends_headers_only() {
+    let (port, _stop_tx, _join) = start_server_graceful(
+        |_req| {
+            SseResponse::new(|w| {
+                let _ = w.send("should not be sent");
+            })
+        },
+        Config::default(),
+    );
+
+    let resp = raw_request(port, b"HEAD /events HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    let lower = resp.to_lowercase();
+    assert!(lower.contains("200"), "response: {}", resp);
+    assert!(lower.contains("text/event-stream"), "response: {}", resp);
+    assert!(!resp.contains("data:"), "response: {}", resp);
+}
+
+#[test]
 fn test_204_suppresses_body_and_content_length() {
     let port = start_server(
         |_req| {
