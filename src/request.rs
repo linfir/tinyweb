@@ -24,6 +24,8 @@ pub struct Request {
     pub path: String,
     /// Parsed query-string parameters, percent-decoded; `+` is treated as a space.
     /// If a key appears more than once, all values are collected in order.
+    /// Keys or values containing control characters (other than HT, CR, LF)
+    /// are rejected with [`StatusCode::BadRequest`].
     pub query: HashMap<String, Vec<String>>,
     /// Request headers.
     /// Keys are lowercased (e.g. `"content-type"`).
@@ -34,6 +36,8 @@ pub struct Request {
     /// Parsed `application/x-www-form-urlencoded` form fields.
     /// Keys and values are percent-decoded; `+` is treated as a space.
     /// Only populated when `Content-Type: application/x-www-form-urlencoded`.
+    /// Keys or values containing control characters (other than HT, CR, LF)
+    /// are rejected with [`StatusCode::BadRequest`].
     pub form: HashMap<String, Vec<String>>,
     /// The TCP peer address (i.e. the reverse proxy's address, not the client's).
     /// For the real client IP behind a proxy, use [`Request::client_ip`].
@@ -488,15 +492,24 @@ fn parse_urlencoded(input: &[u8]) -> Option<HashMap<String, Vec<String>>> {
 }
 
 fn decode_field(input: &[u8]) -> Option<String> {
-    if input.contains(&b'+') {
+    let decoded = if input.contains(&b'+') {
         let replaced: Vec<u8> = input
             .iter()
             .map(|&b| if b == b'+' { b' ' } else { b })
             .collect();
-        enc::percent_decode(&replaced)
+        enc::percent_decode(&replaced)?
     } else {
-        enc::percent_decode(input)
+        enc::percent_decode(input)?
+    };
+    // Same terminal-escape hazard as header values; HT/CR/LF stay allowed
+    // since textarea form data legitimately contains them.
+    if decoded
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\r' | '\n'))
+    {
+        return None;
     }
+    Some(decoded)
 }
 
 fn next_line<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
@@ -674,6 +687,21 @@ fn test_parse_urlencoded_empty_key_skipped() {
 #[test]
 fn test_parse_urlencoded_invalid_percent() {
     assert!(parse_urlencoded(b"key=hello%ZZworld").is_none());
+}
+
+#[test]
+fn test_parse_urlencoded_rejects_control_chars() {
+    assert!(parse_urlencoded(b"q=%1b]0;evil%07").is_none()); // ESC, BEL
+    assert!(parse_urlencoded(b"q=a%00b").is_none()); // NUL
+    assert!(parse_urlencoded(b"q=a%7fb").is_none()); // DEL
+    assert!(parse_urlencoded(b"q=a%c2%9bb").is_none()); // C1 CSI
+    assert!(parse_urlencoded(b"%08=x").is_none()); // control in key
+}
+
+#[test]
+fn test_parse_urlencoded_allows_whitespace_controls() {
+    let map = parse_urlencoded(b"msg=line1%0d%0aline2%09end").unwrap();
+    assert_eq!(map["msg"], ["line1\r\nline2\tend"]);
 }
 
 #[cfg(test)]
