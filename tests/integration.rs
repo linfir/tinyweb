@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use tinyweb::{AnyResponse, Config, Message, Method, Request, Response, SseResponse, WsResponse};
+use tinyweb::{AnyResponse, Config, Method, Request, Response, SseResponse, WsResponse};
 
 fn start_server<F>(handler: F, config: Config) -> u16
 where

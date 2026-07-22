@@ -18,6 +18,7 @@ probably fine behind a robust reverse proxy in production.
 - Automatic MIME type detection
 - HTTP/1.1 keep-alive
 - Server-Sent Events (SSE)
+- WebSockets (RFC 6455)
 
 ## Limitations
 
@@ -25,8 +26,19 @@ Each idle keep-alive connection holds a worker thread for the duration of `idle_
 With the default pool size of 8-32 threads, a small number of idle connections can starve the server (slow loris).
 Similarly, `write_timeout` bounds each write, not the whole response:
 a client that reads slowly holds a worker thread for the duration of a large download.
-A reverse proxy such as nginx mitigates both by buffering requests and responses and using short-lived upstream connections;
+Each open SSE or WebSocket connection also pins a worker thread for its whole lifetime.
+A reverse proxy such as nginx mitigates the first two by buffering requests and responses and using short-lived upstream connections;
 **direct internet exposure without a reverse proxy is not recommended**.
+
+For WebSockets behind nginx, upgrade headers must be forwarded explicitly:
+
+```text
+location /ws {
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
 
 ## Usage
 
@@ -77,6 +89,7 @@ Strict-Transport-Security: max-age=63072000
 See the [`examples/`](examples/) directory:
 
 - [`sse.rs`](examples/sse.rs) Server-Sent Events
+- [`ws_echo.rs`](examples/ws_echo.rs) WebSocket echo with a browser test page
 - [`routing.rs`](examples/routing.rs) path routing with [`matchit`](https://crates.io/crates/matchit)
 - [`graceful_shutdown.rs`](examples/graceful_shutdown.rs) graceful shutdown via a `/quit` route
 
