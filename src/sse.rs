@@ -22,7 +22,7 @@ impl SseResponse {
     }
 }
 
-pub(crate) fn send_sse_headers(stream: &mut TcpStream, date: &Date) -> io::Result<()> {
+pub(crate) fn send_sse_headers(stream: &TcpStream, date: &Date) -> io::Result<()> {
     let mut w = io::BufWriter::new(stream);
     write!(w, "HTTP/1.1 200 OK\r\n")?;
     write!(w, "Date: {}\r\n", date.http())?;
@@ -33,16 +33,29 @@ pub(crate) fn send_sse_headers(stream: &mut TcpStream, date: &Date) -> io::Resul
     w.flush()
 }
 
+// Owned Write over the refcounted connection socket, for BufWriter.
+struct SharedStream(Arc<TcpStream>);
+
+impl Write for SharedStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&mut &*self.0).write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&mut &*self.0).flush()
+    }
+}
+
 /// Writes Server-Sent Events to an open connection.
 pub struct SseWriter {
-    inner: BufWriter<TcpStream>,
+    inner: BufWriter<SharedStream>,
     shutdown: Arc<AtomicBool>,
 }
 
 impl SseWriter {
-    pub(crate) fn new(stream: TcpStream, shutdown: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(stream: Arc<TcpStream>, shutdown: Arc<AtomicBool>) -> Self {
         SseWriter {
-            inner: BufWriter::new(stream),
+            inner: BufWriter::new(SharedStream(stream)),
             shutdown,
         }
     }

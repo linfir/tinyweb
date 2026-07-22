@@ -128,12 +128,12 @@ impl Response {
     /// `keep_alive` is `Some(timeout)` to keep the connection open, `None` to close it.
     pub(crate) fn send(
         &self,
-        stream: &mut TcpStream,
+        stream: &TcpStream,
         keep_alive: Option<Duration>,
         send_body: bool,
         date: &Date,
     ) -> std::io::Result<()> {
-        let mut w = io::BufWriter::new(&mut *stream);
+        let mut w = io::BufWriter::new(stream);
 
         write!(
             w,

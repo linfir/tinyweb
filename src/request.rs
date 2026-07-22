@@ -154,7 +154,7 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn read(
         &mut self,
-        stream: &mut TcpStream,
+        mut stream: &TcpStream,
         shutdown: &AtomicBool,
         id: u64,
     ) -> Result<Request> {
@@ -240,7 +240,7 @@ impl<'a> Reader<'a> {
     // Also returns the read_timeout deadline to be shared with read_body.
     fn read_head(
         &mut self,
-        stream: &mut TcpStream,
+        mut stream: &TcpStream,
         shutdown: &AtomicBool,
     ) -> Result<(usize, Instant)> {
         let max_size = self.config.max_header_size;
@@ -308,7 +308,7 @@ impl<'a> Reader<'a> {
 
     fn read_body(
         &mut self,
-        stream: &mut TcpStream,
+        mut stream: &TcpStream,
         content_length: usize,
         deadline: Instant,
     ) -> Result<()> {

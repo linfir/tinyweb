@@ -101,8 +101,9 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 // Tracks in-flight connections so shutdown can wait for them to drain,
 // and cut their sockets if they outlive the drain timeout.
+// Sockets are shared with the workers via Arc, not try_clone'd fds.
 struct Drain {
-    conns: Mutex<HashMap<u64, Option<TcpStream>>>,
+    conns: Mutex<HashMap<u64, Arc<TcpStream>>>,
     cv: Condvar,
     next_id: AtomicU64,
 }
@@ -116,12 +117,12 @@ impl Drain {
         })
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<u64, Option<TcpStream>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<u64, Arc<TcpStream>>> {
         self.conns.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     // Registers a connection; it stays in flight until the guard is dropped.
-    fn register(self: &Arc<Self>, socket: Option<TcpStream>) -> ConnGuard {
+    fn register(self: &Arc<Self>, socket: Arc<TcpStream>) -> ConnGuard {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.lock().insert(id, socket);
         ConnGuard {
@@ -152,7 +153,7 @@ impl Drain {
     // Shuts down the sockets of all connections still in flight, so their
     // blocked reads and writes fail instead of holding up the drain.
     fn cut_sockets(&self) {
-        for s in self.lock().values_mut().filter_map(Option::take) {
+        for s in self.lock().values() {
             let _ = s.shutdown(Shutdown::Both);
         }
     }
@@ -214,19 +215,18 @@ where
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let stream = Arc::new(stream);
                 let handler = handler.clone();
                 let config = config.clone();
                 let shutdown = shutdown.clone();
                 let write_timeout = config.write_timeout;
-                let stream_copy = stream.try_clone();
+                let job_stream = stream.clone();
                 if !pool.execute(move || {
-                    handle_stream(stream, handler, &config, shutdown);
+                    handle_stream(job_stream, handler, &config, shutdown);
                 }) {
                     log::warn!("thread pool full, rejecting connection");
-                    if let Ok(mut s) = stream_copy {
-                        let _ = s.set_write_timeout(Some(write_timeout));
-                        send_error(&mut s, StatusCode::ServiceUnavailable);
-                    }
+                    let _ = stream.set_write_timeout(Some(write_timeout));
+                    send_error(&stream, StatusCode::ServiceUnavailable);
                 }
             }
             Err(e) => {
@@ -277,24 +277,25 @@ pub fn serve_graceful<F, R>(
 
     loop {
         match listener.accept() {
-            Ok((mut stream, _)) => {
+            Ok((stream, _)) => {
                 if shutdown.load(Ordering::SeqCst) {
                     // Likely the watcher's wake connection; a real client gets a 503.
                     let _ = stream.set_write_timeout(Some(config.write_timeout));
-                    send_error(&mut stream, StatusCode::ServiceUnavailable);
+                    send_error(&stream, StatusCode::ServiceUnavailable);
                     break;
                 }
+                let stream = Arc::new(stream);
                 let handler = handler.clone();
                 let config = config.clone();
                 let shutdown = shutdown.clone();
                 let write_timeout = config.write_timeout;
-                let stream_copy = stream.try_clone();
-                let guard = drain.register(stream.try_clone().ok());
+                let guard = drain.register(stream.clone());
+                let job_stream = stream.clone();
                 if !pool.execute(move || {
                     // On failure, execute drops the closure, and with it the guard.
                     let _guard = guard;
                     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        handle_stream(stream, handler, &config, shutdown);
+                        handle_stream(job_stream, handler, &config, shutdown);
                     }))
                     .is_err()
                     {
@@ -302,10 +303,8 @@ pub fn serve_graceful<F, R>(
                     }
                 }) {
                     log::warn!("thread pool full, rejecting connection");
-                    if let Ok(mut s) = stream_copy {
-                        let _ = s.set_write_timeout(Some(write_timeout));
-                        send_error(&mut s, StatusCode::ServiceUnavailable);
-                    }
+                    let _ = stream.set_write_timeout(Some(write_timeout));
+                    send_error(&stream, StatusCode::ServiceUnavailable);
                 }
             }
             Err(e) => {
@@ -376,9 +375,9 @@ fn reject_backlog(listener: &TcpListener, write_timeout: Duration) {
     }
     for _ in 0..128 {
         match listener.accept() {
-            Ok((mut s, _)) => {
+            Ok((s, _)) => {
                 let _ = s.set_write_timeout(Some(write_timeout));
-                send_error(&mut s, StatusCode::ServiceUnavailable);
+                send_error(&s, StatusCode::ServiceUnavailable);
             }
             Err(_) => break,
         }
@@ -386,7 +385,7 @@ fn reject_backlog(listener: &TcpListener, write_timeout: Duration) {
 }
 
 fn handle_stream<F, R>(
-    mut stream: TcpStream,
+    stream: Arc<TcpStream>,
     req_handler: Arc<F>,
     config: &Config,
     shutdown: Arc<AtomicBool>,
@@ -411,7 +410,7 @@ fn handle_stream<F, R>(
         let start = Instant::now();
         let recv_date = Date::now();
         let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        let req = match rdr.read(&mut stream, &shutdown, id) {
+        let req = match rdr.read(&stream, &shutdown, id) {
             Ok(r) => r,
             Err(request::Error::Closed) => return,
             Err(request::Error::Protocol(status)) => {
@@ -428,7 +427,7 @@ fn handle_stream<F, R>(
                         id,
                     );
                 }
-                send_error(&mut stream, status);
+                send_error(&stream, status);
                 return;
             }
         };
@@ -463,7 +462,7 @@ fn handle_stream<F, R>(
                         req.id,
                     );
                 }
-                send_error(&mut stream, status);
+                send_error(&stream, status);
                 return;
             }
         };
@@ -473,7 +472,7 @@ fn handle_stream<F, R>(
                 let status = resp.status_code();
                 let bytes = resp.body_len();
                 if let Err(e) = resp.send(
-                    &mut stream,
+                    &stream,
                     keep_alive.then_some(config.idle_timeout),
                     req.method != Method::HEAD,
                     &recv_date,
@@ -501,7 +500,7 @@ fn handle_stream<F, R>(
                 }
             }
             AnyResponseImpl::Sse(SseResponse(sse_handler)) => {
-                if let Err(e) = send_sse_headers(&mut stream, &recv_date) {
+                if let Err(e) = send_sse_headers(&stream, &recv_date) {
                     log::error!("Failed to send SSE headers: {}", e);
                     return;
                 }
@@ -630,6 +629,6 @@ fn test_sanitize_field() {
     assert_eq!(sanitize_field("caf\u{e9}"), "caf\\xC3\\xA9");
 }
 
-fn send_error(stream: &mut TcpStream, status_code: StatusCode) {
+fn send_error(stream: &TcpStream, status_code: StatusCode) {
     let _ = Response::error(status_code).send(stream, None, true, &Date::now());
 }
