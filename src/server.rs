@@ -39,7 +39,10 @@ pub struct Config {
     /// Idle timeout between keep-alive requests.
     /// Default: 30 seconds.
     pub idle_timeout: Duration,
-    /// Timeout for writing the response.
+    /// Timeout for each write while sending the response, not for the
+    /// response as a whole.
+    /// A client that keeps reading slowly can extend the total send time
+    /// well beyond this; see the crate-level Limitations section.
     /// Default: 5 seconds.
     pub write_timeout: Duration,
     /// How long [`serve_graceful`] waits for in-flight requests to finish after the stop signal.
