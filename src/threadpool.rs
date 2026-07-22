@@ -81,7 +81,26 @@ fn spawn_worker(receiver: Arc<Mutex<mpsc::Receiver<Job>>>, handles: Handles) {
             }
         }
     });
-    lock(&handles).push(h);
+    let mut hs = lock(&handles);
+    // Respawns would otherwise accumulate dead handles until join().
+    hs.retain(|h| !h.is_finished());
+    hs.push(h);
 }
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
+
+#[test]
+fn test_panicked_workers_do_not_leak_handles() {
+    let pool = ThreadPool::new(2);
+    for _ in 0..20 {
+        while !pool.execute(|| panic!("boom")) {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    // Let the panics and respawns settle.
+    thread::sleep(std::time::Duration::from_millis(300));
+    // 2 live workers, plus at most the last dying worker not yet pruned.
+    let len = lock(&pool.handles).len();
+    assert!(len <= 3, "handles grew to {}", len);
+    pool.join();
+}
