@@ -423,12 +423,20 @@ fn test_304_suppresses_body_and_content_length() {
 
 #[test]
 fn test_handler_panic_returns_500() {
-    let port = start_server(|_req| panic!("test panic"), Config::default());
+    let port = start_server(
+        |req| {
+            if req.path == "/panic" {
+                panic!("test panic");
+            }
+            Response::ok(tinyweb::ContentType::PLAIN, "ok")
+        },
+        Config::default(),
+    );
 
     let resp = raw_request(port, b"GET /panic HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert!(status_line(&resp).contains("500"), "response: {}", resp);
 
     // worker must still be alive -- next request succeeds
     let resp = raw_request(port, b"GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    assert!(status_line(&resp).contains("500"), "response: {}", resp);
+    assert!(status_line(&resp).contains("200"), "response: {}", resp);
 }
